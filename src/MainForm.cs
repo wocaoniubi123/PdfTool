@@ -35,6 +35,7 @@ namespace PdfTool
         private int _shownSeq;                                       // 已经画到屏幕上的渲染序号（判断"这一页画完了没"）
         private Size _lastPageSize;            // 最近一次渲染出来的页面尺寸（占位页照它画）
         private int _lastFastMs;              // 最近一次快渲染耗时（决定停手后要不要补高清）
+        private int _shownPage = -1;         // 当前屏幕上显示的是哪一页（同页重渲染不该显示占位页）
         private readonly Queue<int> _wheelQueue = new Queue<int>();  // 待翻的步子（每项 ±1），一页一页走
         private Timer _wheelTimer;
         private int _lastStepMsg;       // 最近一次滚轮/方向键的时刻（判断"手停了没"）
@@ -337,6 +338,7 @@ namespace PdfTool
         {
             Bitmap old = _preview;
             _preview = null;
+            _shownPage = _index;
             if (old != null) old.Dispose();
             _view.Invalidate();
             _hint.Visible = false;
@@ -751,13 +753,14 @@ namespace PdfTool
                     Bitmap oldh = _preview;
                     _preview = cp;
                     _lastPageSize = cp.Size;
+                    _shownPage = idx;
                     _view.Invalidate();
                     _hint.Visible = false;
                     if (oldh != null && !object.ReferenceEquals(oldh, cp)) oldh.Dispose();
                     return;
                 }
             }
-            ShowPlaceholder();                       // 立刻切成占位页（内容渲染好再盖上）
+            if (_shownPage != idx) ShowPlaceholder();   // 只换了页才显示占位页（同页补高清时内容不遮）
             System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
             {
                 Bitmap bmp = null;
@@ -784,6 +787,7 @@ namespace PdfTool
                         if (seq != _renderSeq) { bmp.Dispose(); return; }
                         _shownSeq = seq;   // 这一版已经上屏，滚轮队列可以走下一步了
                         _lastPageSize = bmp.Size;
+                        _shownPage = idx;
                         CachePut(_job.Pages[idx], bmp, w, h);
                         Bitmap old = _preview;
                         _preview = bmp;
