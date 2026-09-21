@@ -58,7 +58,7 @@ namespace PdfTool
             BackColor = Color.FromArgb(240, 240, 240);
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(930, 690);
-            Height = 756;                      // 默认外框高度（用户实测：756 高时属性对话框不再把窗口挤走）
+            Height = 760;                      // 用户要求高度：756 不够，加到 760
             MinimumSize = new Size(860, 600);
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
