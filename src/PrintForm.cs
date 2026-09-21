@@ -58,7 +58,7 @@ namespace PdfTool
             BackColor = Color.FromArgb(240, 240, 240);
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(930, 690);
-            Height = 732;                      // 默认外框高度（用户按屏幕工作区定的）
+            Height = 756;                      // 默认外框高度（用户实测：756 高时属性对话框不再把窗口挤走）
             MinimumSize = new Size(860, 600);
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
@@ -561,21 +561,7 @@ namespace PdfTool
                         MessageBox.Show(this, "读不到这台打印机的配置。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
-                    Point keepPos = Location;   // Deli 这类驱动会挪动/缩放属主窗口 —— 弹之前先记住位置和尺寸
-                    Size keepSize = Size;
                     int r = DocumentProperties(Handle, hp, _printerName, dm, dm, 4 | 2);   // DM_IN_PROMPT | DM_OUT_BUFFER
-                    // 回来立刻还原一次
-                    if (Location != keepPos || Size != keepSize) { Location = keepPos; Size = keepSize; }
-                    // 个别驱动是对话框关闭之后才挪 → 400ms 再兜一次
-                    Timer fixPos = new Timer();
-                    fixPos.Interval = 400;
-                    fixPos.Tick += delegate(object s2, EventArgs e2)
-                    {
-                        fixPos.Stop();
-                        fixPos.Dispose();
-                        if (Location != keepPos || Size != keepSize) { Location = keepPos; Size = keepSize; }
-                    };
-                    fixPos.Start();
                     if (r < 0)
                         MessageBox.Show(this, "驱动拒绝了属性对话框。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     else
