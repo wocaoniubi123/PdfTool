@@ -218,7 +218,7 @@ namespace PdfTool
             _idleTimer.Tick += delegate
             {
                 _idleTimer.Stop();
-                if (_fastScroll) { _fastScroll = false; if (_lastFastMs < 120) Render(); }   // 慢页不补高清，避免停手后又闪一次
+                if (_fastScroll) { _fastScroll = false; if (_lastFastMs < 120 && _shownPage == _index) Render(); }   // 慢页不补高清，避免停手后又闪一次
             };
 
             _wheelTimer = new Timer();
@@ -784,7 +784,7 @@ namespace PdfTool
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
-                        if (seq != _renderSeq) { bmp.Dispose(); return; }
+                        if (seq != _renderSeq) { CachePut(_job.Pages[idx], bmp, w, h); bmp.Dispose(); return; }   // 过时但已画完：照样存缓存
                         _shownSeq = seq;   // 这一版已经上屏，滚轮队列可以走下一步了
                         _lastPageSize = bmp.Size;
                         _shownPage = idx;
