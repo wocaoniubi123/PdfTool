@@ -33,6 +33,7 @@ namespace PdfTool
         private Timer _idleTimer;
         private bool _fastScroll;
         private int _shownSeq;                                       // 已经画到屏幕上的渲染序号（判断"这一页画完了没"）
+        private Size _lastPageSize;            // 最近一次渲染出来的页面尺寸（占位页照它画）
         private readonly Queue<int> _wheelQueue = new Queue<int>();  // 待翻的步子（每项 ±1），一页一页走
         private Timer _wheelTimer;
         private int _lastStepMsg;       // 最近一次滚轮/方向键的时刻（判断"手停了没"）
@@ -282,9 +283,46 @@ namespace PdfTool
         }
 
         // 1:1 绘制预览（不做任何插值缩放，保证屏幕像素和渲染结果一致）
+        // 翻页时先显示占位页：白纸 + 边框 + "第 N 页"
+        private void ShowPlaceholder()
+        {
+            Bitmap old = _preview;
+            _preview = null;
+            if (old != null) old.Dispose();
+            _view.Invalidate();
+            _hint.Visible = false;
+        }
+
+        private void DrawPlaceholder(Graphics g)
+        {
+            if (_job == null || _job.PageCount == 0) return;
+            int cw = _view.ClientSize.Width, ch = _view.ClientSize.Height;
+            int pw, ph;
+            if (_lastPageSize.Width > 10 && _lastPageSize.Height > 10)
+            {
+                pw = _lastPageSize.Width; ph = _lastPageSize.Height;
+            }
+            else
+            {
+                double ar = 0.707;   // 还不知道页面比例时按 A4 竖版估一个
+                int h2 = Math.Max(80, ch - 24);
+                int w2 = (int)(h2 * ar);
+                if (w2 > cw - 24) { w2 = Math.Max(60, cw - 24); h2 = (int)(w2 / ar); }
+                pw = w2; ph = h2;
+            }
+            int x = (cw - pw) / 2, y = (ch - ph) / 2;
+            g.FillRectangle(Brushes.White, x, y, pw, ph);
+            using (Pen p = new Pen(Color.FromArgb(190, 190, 190)))
+                g.DrawRectangle(p, x, y, pw - 1, ph - 1);
+            string txt = "第 " + (_index + 1) + " 页";
+            SizeF ts = g.MeasureString(txt, Font);
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(170, 170, 170)))
+                g.DrawString(txt, Font, b, x + (pw - ts.Width) / 2, y + (ph - ts.Height) / 2);
+        }
+
         private void OnViewPaint(object sender, PaintEventArgs e)
         {
-            if (_preview == null) return;
+            if (_preview == null) { DrawPlaceholder(e.Graphics); return; }   // 还没画好 → 占位页
             int x = (_view.ClientSize.Width - _preview.Width) / 2;
             int y = (_view.ClientSize.Height - _preview.Height) / 2;
             e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
@@ -371,26 +409,9 @@ namespace PdfTool
                 _wheelTimer.Stop();
                 return;
             }
-            if (_shownSeq != _renderSeq) return;   // 上一页还在画，等它显示出来
-
-            // 手已经停了（90ms 没新消息）但队列还排着 ≥3 步：别让它再自己滚几秒，
-            // 直接一步落到"该到的页"（中途该显示的页在滚动过程里已经显示过了）
-            if (_wheelQueue.Count >= 3 && Environment.TickCount - _lastStepMsg > 90)
-            {
-                int jump = 0;
-                foreach (int s in _wheelQueue) jump += s;
-                _wheelQueue.Clear();
-                int t2 = _index + jump;
-                if (t2 < 0) t2 = 0;
-                if (t2 > _job.PageCount - 1) t2 = _job.PageCount - 1;
-                if (t2 != _index) { Navigate(t2, true); return; }
-                _wheelQueue.Clear();     // 净位移为 0：这波滚动作废，直接收工（原来会掉进空队列 Dequeue 崩掉）
-                _wheelTimer.Stop();
-                return;
-            }
-
+            // 快滚留白方案：不等待渲染完成，每一步立刻翻（画面上先出现占位页）
             int target = _index + _wheelQueue.Dequeue();
-            if (target < 0 || target > _job.PageCount - 1)   // 到首/尾了，剩下的步子作废
+            if (target < 0 || target > _job.PageCount - 1)
             {
                 _wheelQueue.Clear();
                 _wheelTimer.Stop();
@@ -660,6 +681,7 @@ namespace PdfTool
                 _hint.Visible = true;
                 return;
             }
+            ShowPlaceholder();                       // 立刻切成占位页（内容渲染好再盖上）
             int seq = ++_renderSeq;
             int idx = _index;
             bool fast = _fastScroll;
@@ -688,6 +710,7 @@ namespace PdfTool
                     {
                         if (seq != _renderSeq) { bmp.Dispose(); return; }
                         _shownSeq = seq;   // 这一版已经上屏，滚轮队列可以走下一步了
+                        _lastPageSize = bmp.Size;
                         Bitmap old = _preview;
                         _preview = bmp;
                         _view.Invalidate(); // 交给 OnViewPaint 按 1:1 居中绘制
