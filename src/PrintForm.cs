@@ -773,7 +773,8 @@ namespace PdfTool
                     };
                     doc.Print();
                 }
-                _lblInfo.Text = "已发送到打印机";
+                // 发送成功就直接关掉预览窗口（失败走 catch，窗口留着看错误）
+                Close();
             }
             catch (Exception ex)
             {
