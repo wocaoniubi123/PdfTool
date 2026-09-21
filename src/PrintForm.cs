@@ -28,6 +28,10 @@ namespace PdfTool
         private RadioButton _rbFitMargin, _rbActual, _rbCustom;
         private NumericUpDown _numScale;
         private CheckBox _chkCenter, _chkAutoRotate;
+        private CheckBox _chkDuplex;
+        private RadioButton _rbDuplexLong, _rbDuplexShort;
+        private Label _lblDuplexHint;
+        private bool _canDuplex;
 
         private PreviewCanvas _canvas;
         private TextBox _txtPage;
@@ -223,6 +227,25 @@ namespace PdfTool
             g6.Controls.Add(Lbl("%", 180, 99, 20));
             left.Controls.Add(g6);
 
+            GroupBox g8 = Group("双面打印", 6, y, 296, 92); y += 98;
+            _chkDuplex = new CheckBox();
+            _chkDuplex.Text = "自动双面打印";
+            _chkDuplex.SetBounds(12, 20, 160, 22);
+            _chkDuplex.CheckedChanged += delegate { SyncDuplexUi(); };
+            g8.Controls.Add(_chkDuplex);
+            _rbDuplexLong = new RadioButton();
+            _rbDuplexLong.Text = "长边翻转"; _rbDuplexLong.Checked = true;
+            _rbDuplexLong.SetBounds(30, 48, 104, 22);
+            g8.Controls.Add(_rbDuplexLong);
+            _rbDuplexShort = new RadioButton();
+            _rbDuplexShort.Text = "短边翻转";
+            _rbDuplexShort.SetBounds(158, 48, 104, 22);
+            g8.Controls.Add(_rbDuplexShort);
+            _lblDuplexHint = Lbl("", 12, 70, 272);
+            _lblDuplexHint.ForeColor = Color.FromArgb(190, 90, 60);
+            g8.Controls.Add(_lblDuplexHint);
+            left.Controls.Add(g8);
+
             GroupBox g7 = Group("页面设置", 6, y, 296, 58); y += 64;
             _chkCenter = new CheckBox();
             _chkCenter.Text = "自动居中"; _chkCenter.Checked = true;
@@ -332,6 +355,7 @@ namespace PdfTool
 
             SyncRangeUi();
             SyncScaleUi();
+            SyncDuplexUi();
         }
 
         // ---------------- 打印机 / 纸张（全部在后台线程查） ----------------
@@ -357,6 +381,7 @@ namespace PdfTool
                 List<string> printers = new List<string>();
                 List<PaperItem> papers = new List<PaperItem>();
                 double ml = 25, mt = 25;
+                bool canDuplex = false;
                 string use = want;
                 try { foreach (string s in PrinterSettings.InstalledPrinters) printers.Add(s); } catch { }
                 try
@@ -377,6 +402,7 @@ namespace PdfTool
                             RectangleF a = ps.DefaultPageSettings.PrintableArea;
                             if (a.X > 0) ml = a.X;
                             if (a.Y > 0) mt = a.Y;
+                            try { canDuplex = ps.CanDuplex; } catch { }
                         }
                         catch { }
                     }
@@ -387,7 +413,9 @@ namespace PdfTool
                     BeginInvoke((MethodInvoker)delegate
                     {
                         _refreshing = false;
+                        _canDuplex = canDuplex;
                         ApplyPrinterInfo(printers, papers, use, ml, mt);
+                        SyncDuplexUi();
                     });
                 }
                 catch { _refreshing = false; }
@@ -448,6 +476,26 @@ namespace PdfTool
             if (_rbLandscape.Checked) { double t = w; w = h; h = t; }
             _paperW = w; _paperH = h;
             // 硬边距由后台 RefreshPrinterInfo() 查好放 _marginL/_marginT，这里不碰打印机
+        }
+
+        // ★双面打印：当前只保存参数（等接了真打印按钮，用 DuplexSetting 设 PrinterSettings.Duplex）
+        internal Duplex DuplexSetting
+        {
+            get
+            {
+                if (_chkDuplex == null || !_chkDuplex.Checked) return Duplex.Simplex;
+                return _rbDuplexShort.Checked ? Duplex.Horizontal : Duplex.Vertical;
+            }
+        }
+
+        private void SyncDuplexUi()
+        {
+            bool on = _chkDuplex.Checked;
+            _rbDuplexLong.Enabled = on;
+            _rbDuplexShort.Enabled = on;
+            if (on && !_canDuplex) _lblDuplexHint.Text = "当前打印机不支持自动双面（先记着设置）";
+            else if (on) _lblDuplexHint.Text = "";
+            else _lblDuplexHint.Text = "不勾选 = 单面打印";
         }
 
         private void SyncRangeUi()
