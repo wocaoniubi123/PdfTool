@@ -147,7 +147,12 @@ namespace PdfTool
             GroupBox g1 = Group("打印机选择", 6, y, 316, 62); y += 68;
             _cbPrinter = new ComboBox();
             _cbPrinter.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cbPrinter.SetBounds(12, 24, 292, 24);
+            _cbPrinter.SetBounds(12, 24, 208, 24);
+            Button btnProp = new Button();
+            btnProp.Text = "属性";
+            btnProp.SetBounds(226, 24, 78, 24);
+            btnProp.Click += delegate { ShowPrinterProperties(); };
+            g1.Controls.Add(btnProp);
             _cbPrinter.SelectedIndexChanged += delegate { OnPrinterChanged(); };
             g1.Controls.Add(_cbPrinter);
             left.Controls.Add(g1);
@@ -517,6 +522,54 @@ namespace PdfTool
             if (on && !_canDuplex) _lblDuplexHint.Text = "当前打印机不支持自动双面（先记着设置）";
             else if (on) _lblDuplexHint.Text = "";
             else _lblDuplexHint.Text = "不勾选 = 单面打印";
+        }
+
+        // ---- 打印机属性（调用打印驱动的配置对话框）----
+
+        [System.Runtime.InteropServices.DllImport("winspool.drv", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern bool OpenPrinter(string name, out IntPtr h, IntPtr def);
+
+        [System.Runtime.InteropServices.DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool ClosePrinter(IntPtr h);
+
+        [System.Runtime.InteropServices.DllImport("winspool.drv", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int DocumentProperties(IntPtr hwnd, IntPtr hPrinter, string device, IntPtr outBuf, IntPtr inBuf, int mode);
+
+        private void ShowPrinterProperties()
+        {
+            if (_printerName == null || _printerName.Length == 0) return;
+            IntPtr hp;
+            if (!OpenPrinter(_printerName, out hp, IntPtr.Zero))
+            {
+                MessageBox.Show(this, "打不开这台打印机（可能离线）。\r\n可以在 Windows 的「设备和打印机」里改它的属性。",
+                    "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try
+            {
+                int need = DocumentProperties(IntPtr.Zero, hp, _printerName, IntPtr.Zero, IntPtr.Zero, 0);
+                if (need <= 0)
+                {
+                    MessageBox.Show(this, "读不到这台打印机的配置。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                IntPtr dm = System.Runtime.InteropServices.Marshal.AllocHGlobal(need);
+                try
+                {
+                    if (DocumentProperties(IntPtr.Zero, hp, _printerName, dm, IntPtr.Zero, 2) < 0)   // DM_OUT_BUFFER
+                    {
+                        MessageBox.Show(this, "读不到这台打印机的配置。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    int r = DocumentProperties(Handle, hp, _printerName, dm, dm, 4 | 2);   // DM_IN_PROMPT | DM_OUT_BUFFER
+                    if (r < 0)
+                        MessageBox.Show(this, "驱动拒绝了属性对话框。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    else
+                        _lblInfo.Text = "打印机属性已更新（下次点打印时生效）";
+                }
+                finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(dm); }
+            }
+            finally { ClosePrinter(hp); }
         }
 
         private void SyncRangeUi()
