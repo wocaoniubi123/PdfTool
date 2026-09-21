@@ -561,9 +561,21 @@ namespace PdfTool
                         MessageBox.Show(this, "读不到这台打印机的配置。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
-                    Point keepPos = Location;   // 有些驱动会挪动属主窗口 —— 先记住
+                    Point keepPos = Location;   // Deli 这类驱动会挪动/缩放属主窗口 —— 弹之前先记住位置和尺寸
+                    Size keepSize = Size;
                     int r = DocumentProperties(Handle, hp, _printerName, dm, dm, 4 | 2);   // DM_IN_PROMPT | DM_OUT_BUFFER
-                    if (Location != keepPos) Location = keepPos;   // 回来还原
+                    // 回来立刻还原一次
+                    if (Location != keepPos || Size != keepSize) { Location = keepPos; Size = keepSize; }
+                    // 个别驱动是对话框关闭之后才挪 → 400ms 再兜一次
+                    Timer fixPos = new Timer();
+                    fixPos.Interval = 400;
+                    fixPos.Tick += delegate(object s2, EventArgs e2)
+                    {
+                        fixPos.Stop();
+                        fixPos.Dispose();
+                        if (Location != keepPos || Size != keepSize) { Location = keepPos; Size = keepSize; }
+                    };
+                    fixPos.Start();
                     if (r < 0)
                         MessageBox.Show(this, "驱动拒绝了属性对话框。", "属性", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     else
