@@ -53,6 +53,7 @@ namespace PdfTool
             _lock = renderLock;
             _startPage = startPage;
             Text = "打印";
+            try { Icon = Glyphs.PrinterIcon(32, Color.FromArgb(96, 96, 96)); } catch { }
             Font = owner.Font;
             BackColor = Color.FromArgb(240, 240, 240);
             StartPosition = FormStartPosition.CenterParent;

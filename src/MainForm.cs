@@ -57,7 +57,7 @@ namespace PdfTool
         private void BuildUi()
         {
             Text = "PDF 页面工具";
-            Width = 1020;
+            Width = 1060;   // 打印预览按钮带图标后工具栏变宽
             Height = 780;
             StartPosition = FormStartPosition.CenterScreen;
             AllowDrop = true;
@@ -145,6 +145,12 @@ namespace PdfTool
 
             FlowLayoutPanel toolGroup = NewGroup();
             Button btnPrint = MakeButton("打印预览");
+            btnPrint.AutoSize = false;                      // 带图标，宽度写死
+            btnPrint.Width = 106;
+            btnPrint.Image = Glyphs.Printer(16, Color.FromArgb(96, 96, 96));
+            btnPrint.ImageAlign = ContentAlignment.MiddleLeft;
+            btnPrint.TextAlign = ContentAlignment.MiddleRight;
+            btnPrint.Padding = new Padding(6, 0, 8, 0);
             btnPrint.Margin = new Padding(0, 0, 8, 0);
             btnPrint.Click += delegate { PrintPreview(); };
             toolGroup.Controls.Add(btnPrint);

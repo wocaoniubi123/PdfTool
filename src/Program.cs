@@ -43,6 +43,12 @@ namespace PdfTool
                     Application.SetCompatibleTextRenderingDefault(false);
                     Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
                     Application.ThreadException += OnThreadException;
+                    if (args.Length >= 2 && args[0] == "--icons")
+                    {
+                        using (System.Drawing.Bitmap b = Glyphs.Printer(64, System.Drawing.Color.FromArgb(96, 96, 96)))
+                            b.Save(args[1], System.Drawing.Imaging.ImageFormat.Png);
+                        return;
+                    }
                     string initial = null;
                     bool autoPreview = false;
                     for (int i = 0; i < args.Length; i++)

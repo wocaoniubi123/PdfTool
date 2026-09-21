@@ -8,7 +8,7 @@ if not exist "%CSC%" (
 )
 "%CSC%" /nologo /target:winexe /platform:x64 /optimize+ /win32icon:app.ico /out:PdfTool.exe ^
   /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll ^
-  src\Pdfium.cs src\PdfJob.cs src\Cli.cs src\MainForm.cs src\Program.cs
+  src\*.cs
 if errorlevel 1 (
   echo.
   echo 编译失败，请把上面的错误发给我。
