@@ -360,6 +360,7 @@ namespace PdfTool
         private void PumpWheelTick(object sender, EventArgs e)
         {
             try { PumpWheelCore(); }
+            catch { _wheelQueue.Clear(); _wheelTimer.Stop(); }   // 翻页辅助功能，出错就别弹窗了
         }
 
         private void PumpWheelCore()
