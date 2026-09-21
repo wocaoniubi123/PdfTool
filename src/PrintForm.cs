@@ -238,20 +238,32 @@ namespace PdfTool
             Controls.Add(right);
             right.BringToFront();
 
-            Panel bottom = new Panel();
+            // 两列布局：左=提示信息（太长省略号），右=翻页按钮组（整块保证不被压）
+            TableLayoutPanel bottom = new TableLayoutPanel();
             bottom.Dock = DockStyle.Bottom;
             bottom.Height = 46;
             bottom.BackColor = Color.FromArgb(240, 240, 240);
+            bottom.ColumnCount = 2;
+            bottom.RowCount = 1;
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             right.Controls.Add(bottom);
 
+            // 用左停靠而不是绝对定位：和右侧那个 Dock=Right 的翻页面板不会重叠
+            // （之前就是它把「首页」按钮盖住了）
             _lblInfo = new Label();
-            _lblInfo.SetBounds(12, 13, 260, 22);
+            _lblInfo.Dock = DockStyle.Fill;
+            _lblInfo.AutoEllipsis = true;
+            _lblInfo.Margin = new Padding(0);
+            _lblInfo.TextAlign = ContentAlignment.MiddleLeft;
+            _lblInfo.Padding = new Padding(12, 0, 0, 0);
             _lblInfo.ForeColor = Color.FromArgb(90, 90, 90);
             bottom.Controls.Add(_lblInfo);
 
             // 翻页控件放进自动排布的面板（靠右），窗口再小也不会被挤掉
             FlowLayoutPanel nav = new FlowLayoutPanel();
-            nav.Dock = DockStyle.Right;
+            nav.Anchor = AnchorStyles.Left | AnchorStyles.Top;
             nav.AutoSize = true;
             nav.WrapContents = false;
             nav.Padding = new Padding(0, 8, 8, 0);
@@ -267,7 +279,8 @@ namespace PdfTool
 
             _txtPage = new TextBox();
             _txtPage.Width = 52;
-            _txtPage.Margin = new Padding(6, 10, 4, 0);
+            _txtPage.Height = 26;
+            _txtPage.Margin = new Padding(6, 2, 4, 0);   // 和按钮同一中心线
             _txtPage.TextAlign = HorizontalAlignment.Center;
             _txtPage.KeyDown += delegate(object s, KeyEventArgs e)
             {
@@ -283,7 +296,7 @@ namespace PdfTool
 
             _lblTotal = new Label();
             _lblTotal.AutoSize = true;
-            _lblTotal.Margin = new Padding(0, 14, 8, 0);
+            _lblTotal.Margin = new Padding(0, 8, 8, 0);   // 同上，跟按钮平行
             nav.Controls.Add(_lblTotal);
 
             Button bNext = NavBtn("下一页", 68);
