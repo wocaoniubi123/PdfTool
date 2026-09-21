@@ -204,7 +204,7 @@ namespace PdfTool
             _menu.Items.Add("下移本页", null, delegate { MoveCurrent(1); });
             _menu.Items.Add("在上面插入图片", null, delegate { InsertImageDialog(true); });
             _menu.Items.Add("在下面插入图片", null, delegate { InsertImageDialog(false); });
-            _menu.Items.Add("提取图片到桌面", null, delegate { ExtractImages(); });
+            _menu.Items.Add("导出本页为图片（600 DPI）", null, delegate { ExportPageImage(600); });
             _menu.Opened += delegate { MenuEnabled(); };
             _view.ContextMenuStrip = _menu;
             _hint.ContextMenuStrip = _menu;
@@ -920,30 +920,43 @@ namespace PdfTool
             _dirty = true;
         }
 
-        // 把当前页里的图片提取到桌面
-        private void ExtractImages()
+        // 把当前页整页渲染成一张图，导出到 桌面/源文件目录
+        private void ExportPageImage(int dpi)
         {
             if (_job == null || _job.PageCount == 0) return;
+            Cursor old = Cursor;
             try
             {
-                string desktop = OutDir();
-                string prefix = _job.BaseName + "_第" + (_index + 1) + "页";
-                List<string> saved = new List<string>();
-                int n;
-                lock (_renderLock) { n = _job.ExtractPageImages(_index, desktop, prefix, saved); }
-                if (n == 0)
+                Cursor = Cursors.WaitCursor;
+                _lblStatus.Text = "正在导出第 " + (_index + 1) + " 页（" + dpi + " DPI）…";
+                _lblStatus.Refresh();
+                Bitmap bmp;
+                lock (_renderLock)
                 {
-                    _lblStatus.Text = "这一页没有可提取的图片。";
-                    return;
+                    double w100, h100;
+                    _job.PageSizeIn100(_index, out w100, out h100);
+                    int px = Math.Max(1, (int)Math.Round(w100 / 100.0 * dpi));
+                    int py = Math.Max(1, (int)Math.Round(h100 / 100.0 * dpi));
+                    bmp = _job.RenderPage(_index, px, py, false);
                 }
-                _lblStatus.Text = "已提取 " + n + " 张图片到" + DestName() + "。";
-                MessageBox.Show(this, "已提取 " + n + " 张图片到" + DestName() + "：\n" + string.Join("\n", saved.ToArray()),
-                    "提取完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                string path;
+                try
+                {
+                    path = Util.AutoName(Path.Combine(OutDir(),
+                        _job.BaseName + "_第" + (_index + 1) + "页_" + dpi + "dpi.png"));
+                    bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                }
+                finally { bmp.Dispose(); }
+                _lblStatus.Text = "已导出 " + Path.GetFileName(path) + " 到" + DestName() + "。";
+                MessageBox.Show(this, "已导出到" + DestName() + "：\n" + Path.GetFileName(path),
+                    "导出完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "提取失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _lblStatus.Text = "导出失败。";
+                MessageBox.Show(this, "导出失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally { Cursor = old; }
         }
 
         // 当前输出位置的说法：和勾选框文案保持一致（桌面 / 源文件目录）
@@ -961,7 +974,6 @@ namespace PdfTool
             _syncingMode = false;
             Settings.SaveToDesktop = desktop;
             Settings.Save();
-            _menu.Items[6].Text = desktop ? "提取图片到桌面" : "提取图片到源文件目录";
             _lblStatus.Text = "输出位置：" + DestName();
         }
 

@@ -275,7 +275,9 @@ namespace PdfTool
             // 目标显示尺寸：按窗口可视区等比装下
             double scale = Math.Min(maxWidth / (double)pw, maxHeight / (double)ph);
             if (scale <= 0) scale = 1.0;
-            if (scale > 8.0) scale = 8.0;
+            // 上限放宽到 12 倍：导出当前页为图片时 A4 要 8.3 倍（600 DPI）。
+            // 窗口预览一般不到 2 倍，不受影响。
+            if (scale > 12.0) scale = 12.0;
             int dw = Math.Max(1, (int)Math.Round(pw * scale));
             int dh = Math.Max(1, (int)Math.Round(ph * scale));
 
