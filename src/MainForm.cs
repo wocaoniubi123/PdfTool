@@ -187,6 +187,7 @@ namespace PdfTool
             _hint.TextAlign = ContentAlignment.MiddleCenter;
             _hint.ForeColor = Color.DimGray;
             _hint.BackColor = Color.Transparent;
+            CacheClear();
             _hint.Text = HintOpenDoc;
             _hint.AllowDrop = true;
             _hint.DragEnter += OnDragEnter;
@@ -283,6 +284,53 @@ namespace PdfTool
         }
 
         // 1:1 绘制预览（不做任何插值缩放，保证屏幕像素和渲染结果一致）
+        // 已渲染页缓存（只缓存，不预取）：滚回去的页直接复制上屏 —— 解决"滚回去闪一下"
+        private sealed class CacheItem { public PageRef Ref; public Bitmap Bmp; public int W, H; }
+        private readonly List<CacheItem> _pageCache = new List<CacheItem>();
+        private const int PageCacheMax = 8;    // 8 页 ≈ 22MB
+
+        private void CacheClear()
+        {
+            for (int i = 0; i < _pageCache.Count; i++) { try { _pageCache[i].Bmp.Dispose(); } catch { } }
+            _pageCache.Clear();
+        }
+
+        // 返回的是缓存本体，调用方必须复制后使用（缓存自己负责释放）
+        private Bitmap CacheGet(PageRef p, int w, int h)
+        {
+            for (int i = 0; i < _pageCache.Count; i++)
+            {
+                CacheItem it = _pageCache[i];
+                if (object.ReferenceEquals(it.Ref, p) && Math.Abs(it.W - w) <= 4 && Math.Abs(it.H - h) <= 4)
+                {
+                    if (i > 0) { CacheItem tp = _pageCache[0]; _pageCache[0] = it; _pageCache[i] = tp; }   // 最近使用
+                    return it.Bmp;
+                }
+            }
+            return null;
+        }
+
+        private void CachePut(PageRef p, Bitmap src, int w, int h)
+        {
+            for (int i = 0; i < _pageCache.Count; i++)
+                if (object.ReferenceEquals(_pageCache[i].Ref, p)) { _pageCache[i].Bmp.Dispose(); _pageCache.RemoveAt(i); break; }
+            Bitmap copy;
+            try
+            {
+                copy = new Bitmap(src.Width, src.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                using (Graphics cg = Graphics.FromImage(copy)) cg.DrawImageUnscaled(src, 0, 0);
+            }
+            catch { return; }
+            CacheItem it2 = new CacheItem();
+            it2.Ref = p; it2.Bmp = copy; it2.W = w; it2.H = h;
+            _pageCache.Insert(0, it2);
+            while (_pageCache.Count > PageCacheMax)
+            {
+                _pageCache[_pageCache.Count - 1].Bmp.Dispose();
+                _pageCache.RemoveAt(_pageCache.Count - 1);
+            }
+        }
+
         // 翻页时先显示占位页：白纸 + 边框 + "第 N 页"
         private void ShowPlaceholder()
         {
@@ -594,6 +642,7 @@ namespace PdfTool
             _job = PdfJob.CreateNew(desktop, "新PDF");
             _index = 0;
             _dirty = true;   // 还没有对应文件，视为未保存
+            CacheClear();
             _hint.Text = HintNewDoc;
             _lblStatus.Text = talk
                 ? "已新建空白 PDF（保存到桌面）——把图片拖进来，再点「保存修改」"
@@ -681,7 +730,6 @@ namespace PdfTool
                 _hint.Visible = true;
                 return;
             }
-            ShowPlaceholder();                       // 立刻切成占位页（内容渲染好再盖上）
             int seq = ++_renderSeq;
             int idx = _index;
             bool fast = _fastScroll;
@@ -689,6 +737,30 @@ namespace PdfTool
             int h = _view.ClientSize.Height - 2;
             if (w < 60) w = 60;
             if (h < 60) h = 60;
+            // 命中缓存（滚回去的页）：直接复制上屏，不走渲染，也就不会闪占位页
+            Bitmap cahHit = CacheGet(_job.Pages[idx], w, h);
+            if (cahHit != null)
+            {
+                Bitmap cp = null;
+                try
+                {
+                    cp = new Bitmap(cahHit.Width, cahHit.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                    using (Graphics cg = Graphics.FromImage(cp)) cg.DrawImageUnscaled(cahHit, 0, 0);
+                }
+                catch { cp = null; }
+                if (cp != null)
+                {
+                    _renderSeq++;                  // 让在途渲染作废
+                    Bitmap oldh = _preview;
+                    _preview = cp;
+                    _lastPageSize = cp.Size;
+                    _view.Invalidate();
+                    _hint.Visible = false;
+                    if (oldh != null && !object.ReferenceEquals(oldh, cp)) oldh.Dispose();
+                    return;
+                }
+            }
+            ShowPlaceholder();                       // 立刻切成占位页（内容渲染好再盖上）
             System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
             {
                 Bitmap bmp = null;
@@ -711,6 +783,7 @@ namespace PdfTool
                         if (seq != _renderSeq) { bmp.Dispose(); return; }
                         _shownSeq = seq;   // 这一版已经上屏，滚轮队列可以走下一步了
                         _lastPageSize = bmp.Size;
+                        CachePut(_job.Pages[idx], bmp, w, h);
                         Bitmap old = _preview;
                         _preview = bmp;
                         _view.Invalidate(); // 交给 OnViewPaint 按 1:1 居中绘制
