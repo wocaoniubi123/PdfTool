@@ -26,6 +26,8 @@ namespace PdfTool
         private Label _lblTotal;
         private Label _lblStatus;
         private Button _btnFirst;
+        private Button _btnPrev;
+        private Button _btnNext;
         private Button _btnLast;
         private ContextMenuStrip _menu;
         private Timer _posTimer;          // 阅读进度：攒脏了节流写盘
@@ -85,7 +87,7 @@ namespace PdfTool
             Button btnOpen = MakeButton("打开 PDF");
             btnOpen.Click += delegate { OpenDialog(); };
             fileGroup.Controls.Add(btnOpen);
-            Button btnNew = MakeButton("新建PDF（桌面）");
+            Button btnNew = MakeButton("新建 PDF");
             btnNew.Click += delegate { NewPdf(true); };
             fileGroup.Controls.Add(btnNew);
             Button btnSave = MakeButton("保存修改");
@@ -93,25 +95,32 @@ namespace PdfTool
             fileGroup.Controls.Add(btnSave);
 
             _chkDesktop = MakeModeBox("存到桌面");
-            _chkDesktop.Margin = new Padding(8, 0, 0, 0);   // 两个勾选框凑成一组，右边距交给下面那个
+            _chkDesktop.Margin = new Padding(4, 0, 0, 0);   // 两个勾选框凑成一组，右边距交给下面那个
             _chkDesktop.CheckedChanged += delegate { if (!_syncingMode) SetSaveMode(_chkDesktop.Checked); };
             fileGroup.Controls.Add(_chkDesktop);
 
             _chkLocal = MakeModeBox("存到源文件目录");
-            _chkLocal.Margin = new Padding(2, 0, 12, 0);     // 组内只留 2px，不贴住
+            _chkLocal.Margin = new Padding(2, 0, 4, 0);       // 组内只留 2px，不贴住
             _chkLocal.CheckedChanged += delegate { if (!_syncingMode) SetSaveMode(!_chkLocal.Checked); };
             fileGroup.Controls.Add(_chkLocal);
 
             FlowLayoutPanel navGroup = NewGroup();
             navGroup.Anchor = AnchorStyles.None; // 这一组在剩余空间里居中
             _btnFirst = MakeButton("首页");
+            _btnFirst.Margin = new Padding(0, 0, 4, 0);
             _btnFirst.Click += delegate { Go(0); };
             navGroup.Controls.Add(_btnFirst);
 
+            // 上一页/下一页：只有箭头图标，没有文字
+            _btnPrev = MakeIconButton(Glyphs.Arrow(16, Color.FromArgb(96, 96, 96), true));
+            _btnPrev.Margin = new Padding(0, 0, 4, 0);
+            _btnPrev.Click += delegate { Go(_index - 1); };
+            navGroup.Controls.Add(_btnPrev);
+
             _txtPage = new TextBox();
-            _txtPage.Width = 54;
+            _txtPage.Width = 46;
             _txtPage.TextAlign = HorizontalAlignment.Center;
-            _txtPage.Margin = new Padding(0, 4, 6, 4);
+            _txtPage.Margin = new Padding(0, 4, 4, 4);
             _txtPage.KeyDown += OnPageBoxKey;
             _txtPage.KeyPress += OnPageBoxPress;
             // 点进输入框就全选（鼠标松开后再选，否则会被落光标清掉），直接输入覆盖旧页码
@@ -138,12 +147,18 @@ namespace PdfTool
             _lblTotal = new Label();
             _lblTotal.Text = "/ 0";
             _lblTotal.AutoSize = true;          // 按内容自适应，别把「尾页」推远
-            _lblTotal.MinimumSize = new Size(34, 30);
+            _lblTotal.MinimumSize = new Size(28, 30);
             _lblTotal.TextAlign = ContentAlignment.MiddleLeft;
-            _lblTotal.Margin = new Padding(0, 0, 6, 0);
+            _lblTotal.Margin = new Padding(0, 0, 4, 0);
             navGroup.Controls.Add(_lblTotal);
 
+            _btnNext = MakeIconButton(Glyphs.Arrow(16, Color.FromArgb(96, 96, 96), false));
+            _btnNext.Margin = new Padding(0, 0, 4, 0);
+            _btnNext.Click += delegate { Go(_index + 1); };
+            navGroup.Controls.Add(_btnNext);
+
             _btnLast = MakeButton("尾页");
+            _btnLast.Margin = new Padding(0, 0, 4, 0);
             _btnLast.Click += delegate { Go(_job == null ? 0 : _job.PageCount - 1); };
             navGroup.Controls.Add(_btnLast);
 
@@ -174,7 +189,7 @@ namespace PdfTool
             _lblStatus.TextAlign = ContentAlignment.MiddleLeft;
             _lblStatus.Padding = new Padding(12, 0, 0, 0);
             _lblStatus.BackColor = Color.FromArgb(250, 250, 250);
-            _lblStatus.Text = "把 PDF 拖进来打开；也可以点「新建PDF（桌面）」后把图片拖进来。";
+            _lblStatus.Text = "把 PDF 拖进来打开；也可以点「新建 PDF」后把图片拖进来。";
 
             _view = new PreviewBox();
             _view.Dock = DockStyle.Fill;
@@ -279,9 +294,20 @@ namespace PdfTool
             b.Font = Font;                              // 与窗体同字体（雅黑 9pt），宽度按它量
             b.AutoSize = true;
             b.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            b.Padding = new Padding(8, 0, 8, 0);
+            // 内边距按文字长度收窄：短按钮省地方，长按钮保持原样
+            int pad = text.Length <= 2 ? 4 : (text.Length <= 4 ? 6 : 8);
+            b.Padding = new Padding(pad, 0, pad, 0);
             b.MinimumSize = new Size(0, 30);
             b.Margin = new Padding(0, 0, 8, 0);
+            return b;
+        }
+
+        // 图标按钮：只有图没有文字，比文字按钮窄
+        private Button MakeIconButton(Bitmap icon)
+        {
+            Button b = MakeButton("");
+            b.Image = icon;
+            b.Padding = new Padding(5, 0, 5, 0);
             return b;
         }
 
@@ -688,6 +714,8 @@ namespace PdfTool
                 _lblTotal.Text = "/ 0";
                 Text = "PDF 页面工具";
                 _btnFirst.Enabled = false;
+                _btnPrev.Enabled = false;
+                _btnNext.Enabled = false;
                 _btnLast.Enabled = false;
                 _txtPage.Enabled = false;
                 return;
@@ -698,6 +726,8 @@ namespace PdfTool
                 _lblTotal.Text = "/ 0";
                 Text = "PDF 页面工具 - 新 PDF（保存到桌面）" + (_dirty ? " *" : "");
                 _btnFirst.Enabled = false;
+                _btnPrev.Enabled = false;
+                _btnNext.Enabled = false;
                 _btnLast.Enabled = false;
                 _txtPage.Enabled = false;
                 return;
@@ -715,6 +745,8 @@ namespace PdfTool
             string name = _job.SourcePath == null ? "新 PDF（保存到桌面）" : Path.GetFileName(_job.SourcePath);
             Text = "PDF 页面工具 - " + name + (_dirty ? " *" : "");
             _btnFirst.Enabled = _index > 0;
+            _btnPrev.Enabled = _index > 0;
+            _btnNext.Enabled = _index < _job.PageCount - 1;
             _btnLast.Enabled = _index < _job.PageCount - 1;
         }
 

@@ -38,6 +38,26 @@ namespace PdfTool
             return bmp;
         }
 
+        // 翻页箭头（16x16 基准）：实心三角，left=true 指左（上一页）
+        public static Bitmap Arrow(int size, Color color, bool left)
+        {
+            Bitmap bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                g.ScaleTransform(size / 16f, size / 16f);
+                using (SolidBrush br = new SolidBrush(color))
+                {
+                    PointF[] pts = left
+                        ? new PointF[] { new PointF(10.5f, 3f), new PointF(10.5f, 13f), new PointF(4.5f, 8f) }
+                        : new PointF[] { new PointF(5.5f, 3f), new PointF(5.5f, 13f), new PointF(11.5f, 8f) };
+                    g.FillPolygon(br, pts);
+                }
+            }
+            return bmp;
+        }
+
         private static void FillRound(Graphics g, Brush br, float x, float y, float w, float h, float r)
         {
             using (GraphicsPath p = new GraphicsPath())
