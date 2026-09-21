@@ -56,8 +56,8 @@ namespace PdfTool
             Font = owner.Font;
             BackColor = Color.FromArgb(240, 240, 240);
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(1000, 720);
-            MinimumSize = new Size(880, 620);
+            ClientSize = new Size(930, 690);
+            MinimumSize = new Size(860, 600);
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
             {
@@ -107,7 +107,7 @@ namespace PdfTool
         {
             Panel left = new Panel();
             left.Dock = DockStyle.Left;
-            left.Width = 320;
+            left.Width = 340;
             left.AutoScroll = true;
             left.BackColor = Color.FromArgb(240, 240, 240);
             left.Padding = new Padding(10, 8, 6, 8);
@@ -115,15 +115,15 @@ namespace PdfTool
 
             int y = 6;
 
-            GroupBox g1 = Group("打印机选择", 6, y, 296, 62); y += 68;
+            GroupBox g1 = Group("打印机选择", 6, y, 316, 62); y += 68;
             _cbPrinter = new ComboBox();
             _cbPrinter.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cbPrinter.SetBounds(12, 24, 272, 24);
+            _cbPrinter.SetBounds(12, 24, 292, 24);
             _cbPrinter.SelectedIndexChanged += delegate { OnPrinterChanged(); };
             g1.Controls.Add(_cbPrinter);
             left.Controls.Add(g1);
 
-            GroupBox g2 = Group("份数 / 颜色", 6, y, 296, 58); y += 64;
+            GroupBox g2 = Group("份数 / 颜色", 6, y, 316, 58); y += 64;
             g2.Controls.Add(Lbl("份数", 12, 22, 34));
             _numCopies = new NumericUpDown();
             _numCopies.Minimum = 1; _numCopies.Maximum = 999; _numCopies.Value = 1;
@@ -134,12 +134,12 @@ namespace PdfTool
             _cbColor.DropDownStyle = ComboBoxStyle.DropDownList;
             _cbColor.Items.AddRange(new object[] { "彩色打印", "黑白打印" });
             _cbColor.SelectedIndex = 0;
-            _cbColor.SetBounds(162, 20, 122, 24);
+            _cbColor.SetBounds(162, 20, 142, 24);
             _cbColor.SelectedIndexChanged += delegate { if (_canvas != null) _canvas.Invalidate(); };
             g2.Controls.Add(_cbColor);
             left.Controls.Add(g2);
 
-            GroupBox g3 = Group("页面内容和范围选择", 6, y, 296, 92); y += 98;
+            GroupBox g3 = Group("页面内容和范围选择", 6, y, 316, 92); y += 98;
             _rbRangeAll = new RadioButton();
             _rbRangeAll.Text = "所有页面"; _rbRangeAll.SetBounds(12, 20, 88, 22);
             _rbRangeAll.CheckedChanged += delegate { if (_rbRangeAll.Checked) { SyncRangeUi(); BuildSheetList(); } };
@@ -163,7 +163,7 @@ namespace PdfTool
             g3.Controls.Add(Lbl("如 1-5,8,10-12", 148, 52, 140));
             left.Controls.Add(g3);
 
-            GroupBox g4 = Group("奇偶页面", 6, y, 296, 58); y += 64;
+            GroupBox g4 = Group("奇偶页面", 6, y, 316, 58); y += 64;
             _rbOddAll = new RadioButton();
             _rbOddAll.Text = "所有页面"; _rbOddAll.Checked = true;
             _rbOddAll.SetBounds(12, 20, 88, 22);
@@ -179,10 +179,10 @@ namespace PdfTool
             g4.Controls.Add(_rbEven);
             left.Controls.Add(g4);
 
-            GroupBox g5 = Group("纸张大小和方向", 6, y, 296, 86); y += 92;
+            GroupBox g5 = Group("纸张大小和方向", 6, y, 316, 86); y += 92;
             _cbPaper = new ComboBox();
             _cbPaper.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cbPaper.SetBounds(12, 20, 272, 24);
+            _cbPaper.SetBounds(12, 20, 292, 24);
             _cbPaper.SelectedIndexChanged += delegate { UpdateLayoutFromPaper(); BuildSheetList(); };
             g5.Controls.Add(_cbPaper);
             _rbPortrait = new RadioButton();
@@ -197,13 +197,13 @@ namespace PdfTool
             g5.Controls.Add(_rbLandscape);
             left.Controls.Add(g5);
 
-            GroupBox g6 = Group("打印方式 / 缩放", 6, y, 296, 128); y += 134;
+            GroupBox g6 = Group("打印方式 / 缩放", 6, y, 316, 128); y += 134;
             g6.Controls.Add(Lbl("打印方式", 12, 20, 60));
             _cbLayout = new ComboBox();
             _cbLayout.DropDownStyle = ComboBoxStyle.DropDownList;
             _cbLayout.Items.AddRange(new object[] { "页面大小", "一张两页", "一张四页" });
             _cbLayout.SelectedIndex = 0;
-            _cbLayout.SetBounds(76, 18, 208, 24);
+            _cbLayout.SetBounds(76, 18, 228, 24);
             _cbLayout.SelectedIndexChanged += delegate { BuildSheetList(); };
             g6.Controls.Add(_cbLayout);
             _rbFitMargin = new RadioButton();
@@ -227,26 +227,26 @@ namespace PdfTool
             g6.Controls.Add(Lbl("%", 180, 99, 20));
             left.Controls.Add(g6);
 
-            GroupBox g8 = Group("双面打印", 6, y, 296, 92); y += 98;
+            GroupBox g8 = Group("双面打印", 6, y, 316, 74); y += 80;
             _chkDuplex = new CheckBox();
             _chkDuplex.Text = "自动双面打印";
-            _chkDuplex.SetBounds(12, 20, 160, 22);
+            _chkDuplex.SetBounds(12, 22, 116, 22);
             _chkDuplex.CheckedChanged += delegate { SyncDuplexUi(); };
             g8.Controls.Add(_chkDuplex);
             _rbDuplexLong = new RadioButton();
             _rbDuplexLong.Text = "长边翻转"; _rbDuplexLong.Checked = true;
-            _rbDuplexLong.SetBounds(30, 48, 104, 22);
+            _rbDuplexLong.SetBounds(134, 22, 90, 22);
             g8.Controls.Add(_rbDuplexLong);
             _rbDuplexShort = new RadioButton();
             _rbDuplexShort.Text = "短边翻转";
-            _rbDuplexShort.SetBounds(158, 48, 104, 22);
+            _rbDuplexShort.SetBounds(228, 22, 86, 22);
             g8.Controls.Add(_rbDuplexShort);
-            _lblDuplexHint = Lbl("", 12, 70, 272);
+            _lblDuplexHint = Lbl("", 12, 48, 292);
             _lblDuplexHint.ForeColor = Color.FromArgb(190, 90, 60);
             g8.Controls.Add(_lblDuplexHint);
             left.Controls.Add(g8);
 
-            GroupBox g7 = Group("页面设置", 6, y, 296, 58); y += 64;
+            GroupBox g7 = Group("页面设置", 6, y, 316, 58); y += 64;
             _chkCenter = new CheckBox();
             _chkCenter.Text = "自动居中"; _chkCenter.Checked = true;
             _chkCenter.SetBounds(12, 20, 100, 22);
@@ -572,8 +572,7 @@ namespace PdfTool
         {
             _txtPage.Text = (_sheets.Count == 0 ? 0 : _index + 1).ToString();
             _lblTotal.Text = "/ " + _sheets.Count;
-            _lblInfo.Text = "预览：第 " + (_sheets.Count == 0 ? 0 : _index + 1) + " 张 / 共 " + _sheets.Count + " 张"
-                + (_pages.Count != _job.PageCount ? "（已筛选）" : "");
+            _lblInfo.Text = (_sheets.Count == 0 ? 0 : _index + 1) + "/" + _sheets.Count + " 张";
         }
 
         // ---------------- 绘制 ----------------
