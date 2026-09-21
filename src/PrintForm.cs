@@ -114,6 +114,33 @@ namespace PdfTool
             left.Padding = new Padding(10, 8, 6, 8);
             Controls.Add(left);
 
+            // 左下角按钮条（打印 / 取消）—— Dock=Bottom，不会被 AutoScroll 卷走
+            Panel leftBottom = new Panel();
+            leftBottom.Dock = DockStyle.Bottom;
+            leftBottom.Height = 54;
+            leftBottom.BackColor = Color.FromArgb(240, 240, 240);
+            left.Controls.Add(leftBottom);
+
+            Button btnPrint = new Button();
+            btnPrint.Text = "打印";
+            btnPrint.SetBounds(14, 10, 96, 34);
+            btnPrint.FlatStyle = FlatStyle.Flat;
+            btnPrint.FlatAppearance.BorderSize = 0;
+            btnPrint.BackColor = Color.FromArgb(219, 68, 68);   // 整块红
+            btnPrint.ForeColor = Color.White;
+            btnPrint.Click += delegate { DoPrint(); };
+            leftBottom.Controls.Add(btnPrint);
+
+            Button btnCancel = new Button();
+            btnCancel.Text = "取消";
+            btnCancel.SetBounds(122, 10, 96, 34);
+            btnCancel.FlatStyle = FlatStyle.Flat;
+            btnCancel.FlatAppearance.BorderSize = 1;
+            btnCancel.FlatAppearance.BorderColor = Color.FromArgb(160, 160, 160);
+            btnCancel.BackColor = Color.White;
+            btnCancel.Click += delegate { Close(); };
+            leftBottom.Controls.Add(btnCancel);
+
             int y = 6;
 
             GroupBox g1 = Group("打印机选择", 6, y, 316, 62); y += 68;
@@ -336,14 +363,6 @@ namespace PdfTool
             Button bLast = NavBtn("尾页", 60);
             bLast.Click += delegate { Go(_sheets.Count - 1); };
             nav.Controls.Add(bLast);
-
-            Button btnClose = new Button();
-            btnClose.Text = "关闭";
-            btnClose.Width = 80;
-            btnClose.Height = 30;
-            btnClose.Margin = new Padding(10, 0, 0, 0);
-            btnClose.Click += delegate { Close(); };
-            nav.Controls.Add(btnClose);
 
             // 停靠顺序很重要：Fill 的控件必须**最后**加，否则它占满整块、边缘面板只能压在上面
             // （之前这里调了 BringToFront，把顺序打乱，预览画布被底栏压住 46px —— 纸的底边就是这么丢的）
@@ -585,11 +604,11 @@ namespace PdfTool
             public RectangleF Content;
         }
 
-        private List<SheetItem> ContentRects()
+        private List<SheetItem> ContentRects(int sheetIndex)
         {
             List<SheetItem> list = new List<SheetItem>();
-            if (_sheets.Count == 0) return list;
-            int[] sheet = _sheets[_index];
+            if (sheetIndex < 0 || sheetIndex >= _sheets.Count) return list;
+            int[] sheet = _sheets[sheetIndex];
             double pw = _paperW - _marginL * 2, ph = _paperH - _marginT * 2;
             if (pw < 10) pw = _paperW - 50;
             if (ph < 10) ph = _paperH - 50;
@@ -659,7 +678,7 @@ namespace PdfTool
             }
 
             int[] sheet = _sheets[_index];
-            List<SheetItem> items = ContentRects();
+            List<SheetItem> items = ContentRects(_index);
             bool gray = _cbColor.SelectedIndex == 1;
             for (int i = 0; i < sheet.Length && i < items.Count; i++)
             {
@@ -686,6 +705,80 @@ namespace PdfTool
             }
         }
 
+
+        // ---------------- 真打印 ----------------
+
+        // 把当前设置送进打印机：排版和预览共用 ContentRects()，保证所见即所得
+        private void DoPrint()
+        {
+            if (_sheets.Count == 0)
+            {
+                MessageBox.Show(this, "没有可打印的页面。", "打印", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                using (PrintDocument doc = new PrintDocument())
+                {
+                    if (_printerName.Length > 0)
+                    {
+                        try { doc.PrinterSettings.PrinterName = _printerName; } catch { }
+                    }
+                    doc.DocumentName = _job.BaseName;
+                    PaperItem pi = _cbPaper.SelectedItem as PaperItem;
+                    if (pi != null) { try { doc.DefaultPageSettings.PaperSize = pi.Size; } catch { } }
+                    doc.DefaultPageSettings.Landscape = _rbLandscape.Checked;
+                    try { doc.PrinterSettings.Copies = (short)_numCopies.Value; } catch { }
+                    try { doc.PrinterSettings.Duplex = DuplexSetting; } catch { }   // 不支持会自动退化单面
+
+                    int sheetIdx = 0;
+                    doc.PrintPage += delegate(object s, PrintPageEventArgs e)
+                    {
+                        if (sheetIdx >= _sheets.Count) { e.HasMorePages = false; return; }
+                        Graphics g = e.Graphics;
+                        g.PageUnit = GraphicsUnit.Display;   // 1/100 英寸，和 ContentRects 单位一致
+                        int[] sheet = _sheets[sheetIdx];
+                        List<SheetItem> items = ContentRects(sheetIdx);
+                        bool gray = _cbColor.SelectedIndex == 1;
+                        for (int i = 0; i < sheet.Length && i < items.Count; i++)
+                        {
+                            SheetItem it = items[i];
+                            // 相对"可打印区左上角"定位：减去硬边距，并裁到格子内
+                            float x0 = (float)_marginL, y0 = (float)_marginT;
+                            float dx = it.Content.X - x0, dy = it.Content.Y - y0;
+                            float dw = it.Content.Width, dh = it.Content.Height;
+                            if (dw < 1 || dh < 1) continue;
+                            Region old = g.Clip;
+                            g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
+                            Bitmap bmp = null;
+                            try
+                            {
+                                int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * g.DpiX));
+                                int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * g.DpiY));
+                                lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
+                                if (gray) bmp = ToGray(bmp);
+                                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                g.DrawImage(bmp, dx, dy, dw, dh);
+                            }
+                            finally
+                            {
+                                if (bmp != null) bmp.Dispose();
+                                g.Clip = old;
+                            }
+                        }
+                        sheetIdx++;
+                        e.HasMorePages = sheetIdx < _sheets.Count;
+                    };
+                    doc.Print();
+                }
+                _lblInfo.Text = "已发送到打印机";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "打印失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
 
         private static Bitmap ToGray(Bitmap src)
         {
