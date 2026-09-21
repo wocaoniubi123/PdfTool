@@ -28,6 +28,7 @@ namespace PdfTool
         private Button _btnFirst;
         private Button _btnLast;
         private ContextMenuStrip _menu;
+        private Timer _posTimer;          // 阅读进度：攒脏了节流写盘
         private Timer _resizeTimer;
         private Timer _idleTimer;
         private bool _fastScroll;
@@ -219,6 +220,10 @@ namespace PdfTool
             _wheelTimer = new Timer();
             _wheelTimer.Interval = 15;   // 一步 15ms；实际节奏由"上一页画完没"决定（保每页都看得见）
             _wheelTimer.Tick += PumpWheelTick;
+
+            _posTimer = new Timer();
+            _posTimer.Interval = 1200;
+            _posTimer.Tick += delegate { _posTimer.Stop(); Positions.Flush(); };
 
             _resizeTimer = new Timer();
             _resizeTimer.Interval = 200;
@@ -539,7 +544,14 @@ namespace PdfTool
             _index = 0;
             _dirty = false;
             _hint.Text = HintOpenDoc;
-            _lblStatus.Text = Path.GetFileName(path) + "（共 " + _job.PageCount + " 页）";
+            int resume = Positions.Resume(path);
+            if (resume > _job.PageCount) resume = _job.PageCount;
+            if (resume > 1)
+            {
+                _index = resume - 1;
+                _lblStatus.Text = Path.GetFileName(path) + "（共 " + _job.PageCount + " 页）—— 从上次的第 " + resume + " 页继续";
+            }
+            else _lblStatus.Text = Path.GetFileName(path) + "（共 " + _job.PageCount + " 页）";
             UpdateUi();
             Render();
         }
@@ -575,6 +587,11 @@ namespace PdfTool
             if (i > _job.PageCount - 1) i = _job.PageCount - 1;
             if (i == _index) return;
             _index = i;
+            if (_job != null && _job.SourcePath != null)
+            {
+                Positions.Remember(_job.SourcePath, _index + 1);
+                if (!_posTimer.Enabled) _posTimer.Start();
+            }
             _fastScroll = fast;
             UpdateUi();
             Render();
@@ -996,6 +1013,7 @@ namespace PdfTool
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            Positions.Flush();
             if (_preview != null) { _preview.Dispose(); _preview = null; }
             base.OnFormClosed(e);
         }
