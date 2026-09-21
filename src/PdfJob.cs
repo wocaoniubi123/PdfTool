@@ -216,6 +216,22 @@ namespace PdfTool
         }
 
         // 把第 index 页渲成不超过 maxWidth x maxHeight 的位图
+        // 页面物理尺寸（单位 1/100 英寸）：插入的图片页看 PageRef，PDF 页问 pdfium。
+        // 注意 PageRef.Width/Height 对"从 PDF 打开的页"是 0，别再直接用它们做排版。
+        public void PageSizeIn100(int index, out double w, out double h)
+        {
+            PageRef p = Pages[index];
+            if (p.IsImage && p.Width > 0 && p.Height > 0) { w = p.Width; h = p.Height; return; }
+            IntPtr page = Pdfium.FPDF_LoadPage(_doc, p.SrcIndex);
+            if (page == IntPtr.Zero) { w = 595; h = 842; return; }   // 兜底 A4
+            try
+            {
+                w = Pdfium.FPDF_GetPageWidthF(page) * 100.0 / 72.0;
+                h = Pdfium.FPDF_GetPageHeightF(page) * 100.0 / 72.0;
+                if (w < 1 || h < 1) { w = 595; h = 842; }
+            }
+            finally { Pdfium.FPDF_ClosePage(page); }
+        }
         public Bitmap RenderPage(int index, int maxWidth, int maxHeight)
         {
             return RenderPage(index, maxWidth, maxHeight, false);

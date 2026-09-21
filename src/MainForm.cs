@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Printing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Windows.Forms;
 
@@ -142,9 +144,13 @@ namespace PdfTool
             navGroup.Controls.Add(_btnLast);
 
             FlowLayoutPanel toolGroup = NewGroup();
+            Button btnPrint = MakeButton("打印预览");
+            btnPrint.Margin = new Padding(0, 0, 8, 0);
+            btnPrint.Click += delegate { PrintPreview(); };
+            toolGroup.Controls.Add(btnPrint);
+
             Button btnSplit = MakeButton("拆分奇数/偶数页");
             btnSplit.Margin = new Padding(0);
-
             btnSplit.Click += delegate { SplitOddEven(); };
             toolGroup.Controls.Add(btnSplit);
 
@@ -926,6 +932,23 @@ namespace PdfTool
                 MessageBox.Show(this, "保存失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+
+        // ---------------- 打印 ----------------
+
+        // 打印预览：按可打印区域等比排版、逐页画（实际打印以后复用同一套排版逻辑）
+        private void PrintPreview()
+        {
+            if (_job == null || _job.PageCount == 0)
+            {
+                _lblStatus.Text = "没有内容可打印：先打开 PDF 或把图片拖进来。";
+                return;
+            }
+            using (PrintForm f = new PrintForm(this, _job, _renderLock))
+            {
+                f.ShowDialog(this);
+            }
+        }
+
 
         private void SplitOddEven()
         {
