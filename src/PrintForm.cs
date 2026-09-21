@@ -289,15 +289,15 @@ namespace PdfTool
             _lblInfo.AutoEllipsis = false;     // AutoEllipsis 会把文字画到顶部，跟按钮不在一条中线
             _lblInfo.Margin = new Padding(0);
             _lblInfo.TextAlign = ContentAlignment.MiddleLeft;
-            _lblInfo.Padding = new Padding(12, 16, 0, 0);   // 实测下推 4px，和按钮文字同一中线
+            _lblInfo.Padding = new Padding(12, 0, 0, 0);
             _lblInfo.ForeColor = Color.FromArgb(90, 90, 90);
             bottom.Controls.Add(_lblInfo);
 
             FlowLayoutPanel nav = new FlowLayoutPanel();
-            nav.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+            nav.Anchor = AnchorStyles.None;      // 在单元格里垂直居中（原来是 Top，按钮就顶在上面）
             nav.AutoSize = true;
             nav.WrapContents = false;
-            nav.Padding = new Padding(0, 8, 8, 0);
+            nav.Padding = new Padding(0, 0, 8, 0);
             nav.BackColor = Color.FromArgb(240, 240, 240);
             bottom.Controls.Add(nav);
 
