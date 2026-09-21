@@ -936,7 +936,7 @@ namespace PdfTool
         // ---------------- 打印 ----------------
 
         // 打印预览：按可打印区域等比排版、逐页画（实际打印以后复用同一套排版逻辑）
-        private void PrintPreview()
+        internal void PrintPreview()
         {
             if (_job == null || _job.PageCount == 0)
             {

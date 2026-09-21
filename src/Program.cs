@@ -44,8 +44,15 @@ namespace PdfTool
                     Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
                     Application.ThreadException += OnThreadException;
                     string initial = null;
-                    if (args.Length >= 1 && File.Exists(args[0])) initial = args[0];
-                    Application.Run(new MainForm(initial));
+                    bool autoPreview = false;
+                    for (int i = 0; i < args.Length; i++)
+                    {
+                        if (args[i] == "--printpreview") autoPreview = true;
+                        else if (File.Exists(args[i])) initial = args[i];
+                    }
+                    MainForm mf = new MainForm(initial);
+                    if (autoPreview) mf.Shown += delegate { mf.BeginInvoke((MethodInvoker)delegate { mf.PrintPreview(); }); };
+                    Application.Run(mf);
                 }
             }
             catch (Exception ex)

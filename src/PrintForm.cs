@@ -235,15 +235,18 @@ namespace PdfTool
             g7.Controls.Add(_chkAutoRotate);
             left.Controls.Add(g7);
 
-            Panel right = new Panel();
+            TableLayoutPanel right = new TableLayoutPanel();
             right.Dock = DockStyle.Fill;
             right.BackColor = Color.FromArgb(240, 240, 240);
+            right.ColumnCount = 1;
+            right.RowCount = 2;
+            right.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // 预览画布
+            right.RowStyles.Add(new RowStyle(SizeType.Absolute, 46f));   // 底栏
             Controls.Add(right);
-            right.BringToFront();
 
             // 两列布局：左=提示信息（太长省略号），右=翻页按钮组（整块保证不被压）
             TableLayoutPanel bottom = new TableLayoutPanel();
-            bottom.Dock = DockStyle.Bottom;
+            bottom.Dock = DockStyle.Fill;
             bottom.Height = 46;
             bottom.BackColor = Color.FromArgb(240, 240, 240);
             bottom.ColumnCount = 2;
@@ -251,7 +254,7 @@ namespace PdfTool
             bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-            right.Controls.Add(bottom);
+            right.Controls.Add(bottom, 0, 1);
 
             _lblInfo = new Label();
             _lblInfo.Dock = DockStyle.Fill;
@@ -314,13 +317,14 @@ namespace PdfTool
             btnClose.Click += delegate { Close(); };
             nav.Controls.Add(btnClose);
 
+            // 停靠顺序很重要：Fill 的控件必须**最后**加，否则它占满整块、边缘面板只能压在上面
+            // （之前这里调了 BringToFront，把顺序打乱，预览画布被底栏压住 46px —— 纸的底边就是这么丢的）
             _canvas = new PreviewCanvas();
             _canvas.Dock = DockStyle.Fill;
             _canvas.BackColor = Color.FromArgb(200, 200, 200);
             _canvas.Paint += CanvasPaint;
-            right.Controls.Add(_canvas);
-            _canvas.BringToFront();
-            bottom.BringToFront();
+            right.Controls.Remove(_canvas);
+            right.Controls.Add(_canvas, 0, 0);
 
             SyncRangeUi();
             SyncScaleUi();
