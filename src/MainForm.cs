@@ -120,7 +120,7 @@ namespace PdfTool
             _txtPage = new TextBox();
             _txtPage.Width = 46;
             _txtPage.TextAlign = HorizontalAlignment.Center;
-            _txtPage.Margin = new Padding(0, 4, 4, 4);
+            _txtPage.Margin = new Padding(0, 3, 4, 3);   // 上下 3px：算上框高刚好不把整组撑高（撑高会让这组比左右两组高 1px）
             _txtPage.KeyDown += OnPageBoxKey;
             _txtPage.KeyPress += OnPageBoxPress;
             // 点进输入框就全选（鼠标松开后再选，否则会被落光标清掉），直接输入覆盖旧页码
