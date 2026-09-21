@@ -5,6 +5,7 @@ PdfTool.exe
 
 # 本机设置 / 调试
 PdfTool.ini
+PdfTool.pos.ini
 _dbg.txt
 _m*/
 *.bak
