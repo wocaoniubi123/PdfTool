@@ -359,6 +359,12 @@ namespace PdfTool
         // 每 25ms 试走一步；上一页还没画到屏幕上就等着（这样快滚也是连续实时预览，不跳图）
         private void PumpWheelTick(object sender, EventArgs e)
         {
+            try { PumpWheelCore(); }
+            catch { _wheelQueue.Clear(); _wheelTimer.Stop(); }   // 翻页辅助功能，出错就别弹窗了
+        }
+
+        private void PumpWheelCore()
+        {
             if (_job == null || _job.PageCount == 0 || _wheelQueue.Count == 0)
             {
                 _wheelQueue.Clear();
@@ -379,6 +385,9 @@ namespace PdfTool
                 if (t2 > _job.PageCount - 1) t2 = _job.PageCount - 1;
                 if (t2 != _index) { Navigate(t2, true); return; }
             }
+                _wheelQueue.Clear();     // 净位移为 0：这波滚动作废，直接收工（原来会掉进空队列 Dequeue 崩掉）
+                _wheelTimer.Stop();
+                return;
 
             int target = _index + _wheelQueue.Dequeue();
             if (target < 0 || target > _job.PageCount - 1)   // 到首/尾了，剩下的步子作废
