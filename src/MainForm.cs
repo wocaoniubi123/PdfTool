@@ -362,10 +362,6 @@ namespace PdfTool
             g.FillRectangle(Brushes.White, x, y, pw, ph);
             using (Pen p = new Pen(Color.FromArgb(190, 190, 190)))
                 g.DrawRectangle(p, x, y, pw - 1, ph - 1);
-            string txt = "第 " + (_index + 1) + " 页";
-            SizeF ts = g.MeasureString(txt, Font);
-            using (SolidBrush b = new SolidBrush(Color.FromArgb(170, 170, 170)))
-                g.DrawString(txt, Font, b, x + (pw - ts.Width) / 2, y + (ph - ts.Height) / 2);
         }
 
         private void OnViewPaint(object sender, PaintEventArgs e)
