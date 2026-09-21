@@ -239,10 +239,14 @@ namespace PdfTool
             right.Dock = DockStyle.Fill;
             right.BackColor = Color.FromArgb(240, 240, 240);
             right.ColumnCount = 1;
+            right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             right.RowCount = 2;
             right.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // 预览画布
             right.RowStyles.Add(new RowStyle(SizeType.Absolute, 46f));   // 底栏
             Controls.Add(right);
+            // 关键：Fill 的右区必须排到集合最前（停靠从后往前处理），否则它会占满整窗、
+            // 纸就会按"整窗宽度"居中而看起来偏左（上面被左侧设置面板压住）
+            Controls.SetChildIndex(right, 0);
 
             // 两列布局：左=提示信息（太长省略号），右=翻页按钮组（整块保证不被压）
             TableLayoutPanel bottom = new TableLayoutPanel();
