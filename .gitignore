@@ -1,0 +1,11 @@
+# 构建产物
+PdfTool.exe
+*.pdb
+*.tmp
+
+# 本机设置 / 调试
+PdfTool.ini
+_dbg.txt
+_m*/
+*.bak
+__pycache__/
