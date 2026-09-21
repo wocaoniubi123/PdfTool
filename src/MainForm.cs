@@ -943,7 +943,7 @@ namespace PdfTool
                 _lblStatus.Text = "没有内容可打印：先打开 PDF 或把图片拖进来。";
                 return;
             }
-            using (PrintForm f = new PrintForm(this, _job, _renderLock))
+            using (PrintForm f = new PrintForm(this, _job, _renderLock, _index))
             {
                 f.ShowDialog(this);
             }

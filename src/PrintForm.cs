@@ -14,9 +14,12 @@ namespace PdfTool
     {
         private readonly PdfJob _job;
         private readonly object _lock;
+        private readonly int _startPage;   // 主界面当前页（"当前页"范围的默认值）
         private int _index;
 
-        private ComboBox _cbPrinter, _cbColor, _cbRangeMode, _cbOddEven, _cbPaper, _cbLayout;
+        private ComboBox _cbPrinter, _cbColor, _cbPaper, _cbLayout;
+        private RadioButton _rbRangeAll, _rbRangeCur, _rbRangeRange;
+        private RadioButton _rbOddAll, _rbOdd, _rbEven;
         private TextBox _txtRange;
         private NumericUpDown _numCopies;
         private RadioButton _rbPortrait, _rbLandscape;
@@ -36,10 +39,11 @@ namespace PdfTool
         private readonly List<int> _pages = new List<int>();      // 筛选后的页序（0 基）
         private readonly List<int[]> _sheets = new List<int[]>(); // 每张纸放哪些页
 
-        public PrintForm(MainForm owner, PdfJob job, object renderLock)
+        public PrintForm(MainForm owner, PdfJob job, object renderLock, int startPage)
         {
             _job = job;
             _lock = renderLock;
+            _startPage = startPage;
             Text = "打印";
             Font = owner.Font;
             BackColor = Color.FromArgb(240, 240, 240);
@@ -82,11 +86,13 @@ namespace PdfTool
             return l;
         }
 
-        private Button NavBtn(string text, int x)
+        private static Button NavBtn(string text, int w)
         {
             Button b = new Button();
             b.Text = text;
-            b.SetBounds(x, 8, 34, 30);
+            b.Width = w;
+            b.Height = 30;
+            b.Margin = new Padding(0, 0, 4, 0);
             return b;
         }
 
@@ -126,36 +132,44 @@ namespace PdfTool
             g2.Controls.Add(_cbColor);
             left.Controls.Add(g2);
 
-            GroupBox g3 = Group("页面内容和范围选择", 6, y, 296, 90); y += 96;
-            g3.Controls.Add(Lbl("页面范围", 12, 20, 60));
-            _cbRangeMode = new ComboBox();
-            _cbRangeMode.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cbRangeMode.Items.AddRange(new object[] { "所有页面", "当前页", "页码范围" });
-            _cbRangeMode.SelectedIndex = 0;
-            _cbRangeMode.SetBounds(76, 18, 208, 24);
-            _cbRangeMode.SelectedIndexChanged += delegate
-            {
-                _txtRange.Enabled = _cbRangeMode.SelectedIndex == 2;
-                BuildSheetList();
-            };
-            g3.Controls.Add(_cbRangeMode);
-            g3.Controls.Add(Lbl("页面选择", 12, 52, 60));
+            GroupBox g3 = Group("页面内容和范围选择", 6, y, 296, 92); y += 98;
+            _rbRangeAll = new RadioButton();
+            _rbRangeAll.Text = "所有页面"; _rbRangeAll.SetBounds(12, 20, 88, 22);
+            _rbRangeAll.CheckedChanged += delegate { if (_rbRangeAll.Checked) { SyncRangeUi(); BuildSheetList(); } };
+            g3.Controls.Add(_rbRangeAll);
+            _rbRangeCur = new RadioButton();
+            _rbRangeCur.Text = "当前页"; _rbRangeCur.Checked = true;      // 默认当前页
+            _rbRangeCur.SetBounds(104, 20, 76, 22);
+            _rbRangeCur.CheckedChanged += delegate { if (_rbRangeCur.Checked) { SyncRangeUi(); BuildSheetList(); } };
+            g3.Controls.Add(_rbRangeCur);
+            _rbRangeRange = new RadioButton();
+            _rbRangeRange.Text = "页码范围";
+            _rbRangeRange.SetBounds(184, 20, 90, 22);
+            _rbRangeRange.CheckedChanged += delegate { if (_rbRangeRange.Checked) { SyncRangeUi(); BuildSheetList(); } };
+            g3.Controls.Add(_rbRangeRange);
             _txtRange = new TextBox();
-            _txtRange.SetBounds(76, 50, 130, 24);
+            _txtRange.SetBounds(12, 50, 130, 24);
             _txtRange.Text = "1-" + Math.Max(1, _job.PageCount);
             _txtRange.Enabled = false;
             _txtRange.TextChanged += delegate { BuildSheetList(); };
             g3.Controls.Add(_txtRange);
+            g3.Controls.Add(Lbl("如 1-5,8,10-12", 148, 52, 140));
             left.Controls.Add(g3);
 
             GroupBox g4 = Group("奇偶页面", 6, y, 296, 58); y += 64;
-            _cbOddEven = new ComboBox();
-            _cbOddEven.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cbOddEven.Items.AddRange(new object[] { "所有页面", "仅奇数页", "仅偶数页" });
-            _cbOddEven.SelectedIndex = 0;
-            _cbOddEven.SetBounds(12, 20, 272, 24);
-            _cbOddEven.SelectedIndexChanged += delegate { BuildSheetList(); };
-            g4.Controls.Add(_cbOddEven);
+            _rbOddAll = new RadioButton();
+            _rbOddAll.Text = "所有页面"; _rbOddAll.Checked = true;
+            _rbOddAll.SetBounds(12, 20, 88, 22);
+            _rbOddAll.CheckedChanged += delegate { if (_rbOddAll.Checked) BuildSheetList(); };
+            g4.Controls.Add(_rbOddAll);
+            _rbOdd = new RadioButton();
+            _rbOdd.Text = "仅奇数页"; _rbOdd.SetBounds(104, 20, 80, 22);
+            _rbOdd.CheckedChanged += delegate { if (_rbOdd.Checked) BuildSheetList(); };
+            g4.Controls.Add(_rbOdd);
+            _rbEven = new RadioButton();
+            _rbEven.Text = "仅偶数页"; _rbEven.SetBounds(188, 20, 80, 22);
+            _rbEven.CheckedChanged += delegate { if (_rbEven.Checked) BuildSheetList(); };
+            g4.Controls.Add(_rbEven);
             left.Controls.Add(g4);
 
             GroupBox g5 = Group("纸张大小和方向", 6, y, 296, 86); y += 92;
@@ -231,25 +245,29 @@ namespace PdfTool
             right.Controls.Add(bottom);
 
             _lblInfo = new Label();
-            _lblInfo.SetBounds(12, 12, 250, 22);
+            _lblInfo.SetBounds(12, 13, 260, 22);
             _lblInfo.ForeColor = Color.FromArgb(90, 90, 90);
             bottom.Controls.Add(_lblInfo);
 
-            Button btnClose = new Button();
-            btnClose.Text = "关闭";
-            btnClose.SetBounds(552, 8, 90, 30);
-            btnClose.Click += delegate { Close(); };
-            bottom.Controls.Add(btnClose);
+            // 翻页控件放进自动排布的面板（靠右），窗口再小也不会被挤掉
+            FlowLayoutPanel nav = new FlowLayoutPanel();
+            nav.Dock = DockStyle.Right;
+            nav.AutoSize = true;
+            nav.WrapContents = false;
+            nav.Padding = new Padding(0, 8, 8, 0);
+            nav.BackColor = Color.FromArgb(240, 240, 240);
+            bottom.Controls.Add(nav);
 
-            Button bFirst = NavBtn("|<", 268);
+            Button bFirst = NavBtn("首页", 60);
             bFirst.Click += delegate { Go(0); };
-            bottom.Controls.Add(bFirst);
-            Button bPrev = NavBtn("<", 306);
+            nav.Controls.Add(bFirst);
+            Button bPrev = NavBtn("上一页", 68);
             bPrev.Click += delegate { Go(_index - 1); };
-            bottom.Controls.Add(bPrev);
+            nav.Controls.Add(bPrev);
 
             _txtPage = new TextBox();
-            _txtPage.SetBounds(348, 11, 56, 24);
+            _txtPage.Width = 52;
+            _txtPage.Margin = new Padding(6, 10, 4, 0);
             _txtPage.TextAlign = HorizontalAlignment.Center;
             _txtPage.KeyDown += delegate(object s, KeyEventArgs e)
             {
@@ -261,18 +279,27 @@ namespace PdfTool
                     else UpdatePageBox();
                 }
             };
-            bottom.Controls.Add(_txtPage);
+            nav.Controls.Add(_txtPage);
 
             _lblTotal = new Label();
-            _lblTotal.SetBounds(410, 13, 60, 20);
-            bottom.Controls.Add(_lblTotal);
+            _lblTotal.AutoSize = true;
+            _lblTotal.Margin = new Padding(0, 14, 8, 0);
+            nav.Controls.Add(_lblTotal);
 
-            Button bNext = NavBtn(">", 452);
+            Button bNext = NavBtn("下一页", 68);
             bNext.Click += delegate { Go(_index + 1); };
-            bottom.Controls.Add(bNext);
-            Button bLast = NavBtn(">|", 490);
+            nav.Controls.Add(bNext);
+            Button bLast = NavBtn("尾页", 60);
             bLast.Click += delegate { Go(_sheets.Count - 1); };
-            bottom.Controls.Add(bLast);
+            nav.Controls.Add(bLast);
+
+            Button btnClose = new Button();
+            btnClose.Text = "关闭";
+            btnClose.Width = 80;
+            btnClose.Height = 30;
+            btnClose.Margin = new Padding(10, 0, 0, 0);
+            btnClose.Click += delegate { Close(); };
+            nav.Controls.Add(btnClose);
 
             _canvas = new PreviewCanvas();
             _canvas.Dock = DockStyle.Fill;
@@ -282,6 +309,7 @@ namespace PdfTool
             _canvas.BringToFront();
             bottom.BringToFront();
 
+            SyncRangeUi();
             SyncScaleUi();
         }
 
@@ -379,6 +407,11 @@ namespace PdfTool
             catch { }
         }
 
+        private void SyncRangeUi()
+        {
+            _txtRange.Enabled = _rbRangeRange.Checked;
+        }
+
         private void SyncScaleUi()
         {
             _numScale.Enabled = _rbCustom.Checked;
@@ -391,8 +424,8 @@ namespace PdfTool
             _pages.Clear();
             int total = _job.PageCount;
             int from = 0, to = total - 1;
-            if (_cbRangeMode.SelectedIndex == 1) from = to = Math.Min(Math.Max(_index, 0), total - 1);
-            else if (_cbRangeMode.SelectedIndex == 2)
+            if (_rbRangeCur.Checked) from = to = Math.Min(Math.Max(_startPage, 0), total - 1);
+            else if (_rbRangeRange.Checked)
             {
                 from = -1; to = -1;
                 foreach (string part in _txtRange.Text.Split(','))
@@ -416,8 +449,8 @@ namespace PdfTool
             {
                 if (i < 0) continue;
                 bool odd = ((i + 1) % 2) == 1;
-                if (_cbOddEven.SelectedIndex == 1 && !odd) continue;
-                if (_cbOddEven.SelectedIndex == 2 && odd) continue;
+                if (_rbOdd.Checked && !odd) continue;
+                if (_rbEven.Checked && odd) continue;
                 _pages.Add(i);
             }
             _sheets.Clear();
