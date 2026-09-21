@@ -57,6 +57,7 @@ namespace PdfTool
             BackColor = Color.FromArgb(240, 240, 240);
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(930, 690);
+            Height = 732;                      // 默认外框高度（用户按屏幕工作区定的）
             MinimumSize = new Size(860, 600);
             KeyPreview = true;
             KeyDown += delegate(object s, KeyEventArgs e)
@@ -285,10 +286,10 @@ namespace PdfTool
 
             _lblInfo = new Label();
             _lblInfo.Dock = DockStyle.Fill;
-            _lblInfo.AutoEllipsis = true;
+            _lblInfo.AutoEllipsis = false;     // AutoEllipsis 会把文字画到顶部，跟按钮不在一条中线
             _lblInfo.Margin = new Padding(0);
             _lblInfo.TextAlign = ContentAlignment.MiddleLeft;
-            _lblInfo.Padding = new Padding(12, 0, 0, 0);
+            _lblInfo.Padding = new Padding(12, 16, 0, 0);   // 实测下推 4px，和按钮文字同一中线
             _lblInfo.ForeColor = Color.FromArgb(90, 90, 90);
             bottom.Controls.Add(_lblInfo);
 
