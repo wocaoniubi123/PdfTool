@@ -943,6 +943,7 @@ namespace PdfTool
                 _lblStatus.Text = "没有内容可打印：先打开 PDF 或把图片拖进来。";
                 return;
             }
+        try { File.AppendAllText(@"G:\ZCode\PdfTool\_m14\steps.txt", "M1 click" + Environment.NewLine, System.Text.Encoding.UTF8); } catch (Exception dz) { }
             using (PrintForm f = new PrintForm(this, _job, _renderLock, _index))
             {
                 f.ShowDialog(this);

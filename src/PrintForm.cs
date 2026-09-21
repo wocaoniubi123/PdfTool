@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Printing;
+using System.IO;
 using System.Windows.Forms;
 
 namespace PdfTool
@@ -12,6 +13,7 @@ namespace PdfTool
     // 单位统一用 1/100 英寸（和打印 API 一致），显示时按纸张比例换算
     internal sealed class PrintForm : Form
     {
+
         private readonly PdfJob _job;
         private readonly object _lock;
         private readonly int _startPage;   // 主界面当前页（"当前页"范围的默认值）
@@ -33,8 +35,10 @@ namespace PdfTool
         private Label _lblInfo;
 
         private string _printerName = "";
+        private bool _refreshing;
+        private bool _syncingPrinter;
         private double _paperW = 827, _paperH = 1169;      // A4，1/100 英寸
-        private double _marginL = 25, _marginT = 25;       // 打印机硬边距
+        private double _marginL = 25, _marginT = 25;       // 打印机硬边距（后台查到后覆盖）
 
         private readonly List<int> _pages = new List<int>();      // 筛选后的页序（0 基）
         private readonly List<int[]> _sheets = new List<int[]>(); // 每张纸放哪些页
@@ -59,11 +63,10 @@ namespace PdfTool
             };
 
             BuildUi();
-            LoadPrinters();
-            BuildPaperList();
-            UpdateLayoutFromPaper();
+            UseFallbackPaper();
             BuildSheetList();
             Go(0);
+            RefreshPrinterInfo();    // 打印机/纸张信息后台查（离线打印机查询会卡好几秒）
         }
 
         // ---------------- 界面 ----------------
@@ -250,8 +253,6 @@ namespace PdfTool
             bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             right.Controls.Add(bottom);
 
-            // 用左停靠而不是绝对定位：和右侧那个 Dock=Right 的翻页面板不会重叠
-            // （之前就是它把「首页」按钮盖住了）
             _lblInfo = new Label();
             _lblInfo.Dock = DockStyle.Fill;
             _lblInfo.AutoEllipsis = true;
@@ -261,7 +262,6 @@ namespace PdfTool
             _lblInfo.ForeColor = Color.FromArgb(90, 90, 90);
             bottom.Controls.Add(_lblInfo);
 
-            // 翻页控件放进自动排布的面板（靠右），窗口再小也不会被挤掉
             FlowLayoutPanel nav = new FlowLayoutPanel();
             nav.Anchor = AnchorStyles.Left | AnchorStyles.Top;
             nav.AutoSize = true;
@@ -326,73 +326,108 @@ namespace PdfTool
             SyncScaleUi();
         }
 
-        // ---------------- 打印机 / 纸张 ----------------
+        // ---------------- 打印机 / 纸张（全部在后台线程查） ----------------
 
-        private void LoadPrinters()
-        {
-            try
-            {
-                foreach (string n in PrinterSettings.InstalledPrinters) _cbPrinter.Items.Add(n);
-                PrinterSettings ps = new PrinterSettings();
-                string def = ps.PrinterName;
-                if (_cbPrinter.Items.Count > 0)
-                {
-                    int i = 0;
-                    for (int k = 0; k < _cbPrinter.Items.Count; k++)
-                        if ((string)_cbPrinter.Items[k] == def) { i = k; break; }
-                    _cbPrinter.SelectedIndex = i;
-                    _printerName = (string)_cbPrinter.Items[i];
-                }
-            }
-            catch { }
-            if (_cbPrinter.Items.Count == 0)
-            {
-                _cbPrinter.Items.Add("（没有检测到打印机，仅预览）");
-                _cbPrinter.SelectedIndex = 0;
-            }
-        }
-
-        private void BuildPaperList()
+        private void UseFallbackPaper()
         {
             _cbPaper.Items.Clear();
-            List<PaperItem> sizes = new List<PaperItem>();
-            try
+            _cbPaper.Items.Add(new PaperItem(new PaperSize("A4", 827, 1169)));
+            _cbPaper.Items.Add(new PaperItem(new PaperSize("A3", 1169, 1654)));
+            _cbPaper.Items.Add(new PaperItem(new PaperSize("A5", 583, 827)));
+            _cbPaper.Items.Add(new PaperItem(new PaperSize("Letter", 850, 1100)));
+            _cbPaper.SelectedIndex = 0;
+        }
+
+        // 打印机列表 / 该打印机的纸张 / 硬边距：都在后台线程查，查完回 UI 线程填
+        private void RefreshPrinterInfo()
+        {
+            if (_refreshing) return;
+            _refreshing = true;
+            string want = _printerName;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate(object st)
             {
-                if (_printerName.Length > 0)
+                List<string> printers = new List<string>();
+                List<PaperItem> papers = new List<PaperItem>();
+                double ml = 25, mt = 25;
+                string use = want;
+                try { foreach (string s in PrinterSettings.InstalledPrinters) printers.Add(s); } catch { }
+                try
                 {
                     PrinterSettings ps = new PrinterSettings();
-                    ps.PrinterName = _printerName;
-                    foreach (PaperSize s in ps.PaperSizes)
+                    if (use.Length == 0) use = ps.PrinterName;
+                    if (use.Length > 0)
                     {
-                        if (s.Width < 100 || s.Height < 100) continue;   // 驱动里的怪尺寸跳过
-                        sizes.Add(new PaperItem(s));
+                        ps.PrinterName = use;
+                        try
+                        {
+                            foreach (PaperSize s in ps.PaperSizes)
+                                if (s.Width >= 100 && s.Height >= 100) papers.Add(new PaperItem(s));
+                        }
+                        catch { }
+                        try
+                        {
+                            RectangleF a = ps.DefaultPageSettings.PrintableArea;
+                            if (a.X > 0) ml = a.X;
+                            if (a.Y > 0) mt = a.Y;
+                        }
+                        catch { }
                     }
                 }
-            }
-            catch { }
-            if (sizes.Count == 0)
-            {
-                sizes.Add(new PaperItem(new PaperSize("A4", 827, 1169)));
-                sizes.Add(new PaperItem(new PaperSize("A3", 1169, 1654)));
-                sizes.Add(new PaperItem(new PaperSize("A5", 583, 827)));
-                sizes.Add(new PaperItem(new PaperSize("Letter", 850, 1100)));
-            }
-            foreach (PaperItem s in sizes) _cbPaper.Items.Add(s);
+                catch { }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        _refreshing = false;
+                        ApplyPrinterInfo(printers, papers, use, ml, mt);
+                    });
+                }
+                catch { _refreshing = false; }
+            });
+        }
+
+        private void ApplyPrinterInfo(List<string> printers, List<PaperItem> papers, string use, double ml, double mt)
+        {
+            if (printers.Count == 0) printers.Add("（没有检测到打印机，仅预览）");
+            _cbPrinter.BeginUpdate();
+            _cbPrinter.Items.Clear();
+            foreach (string s in printers) _cbPrinter.Items.Add(s);
+            _cbPrinter.EndUpdate();
             int pick = 0;
-            for (int i = 0; i < _cbPaper.Items.Count; i++)
+            for (int i = 0; i < _cbPrinter.Items.Count; i++)
+                if ((string)_cbPrinter.Items[i] == use) { pick = i; break; }
+            _syncingPrinter = true;
+            _cbPrinter.SelectedIndex = pick;
+            _syncingPrinter = false;
+            _printerName = use.Length > 0 ? use : (string)_cbPrinter.Items[0];
+            _marginL = ml; _marginT = mt;
+
+            if (papers.Count > 0)
             {
-                PaperItem it = (PaperItem)_cbPaper.Items[i];
-                if (it.Size.PaperName == "A4" || it.Size.Kind == PaperKind.A4) { pick = i; break; }
+                PaperSize keep = null;
+                PaperItem pi = _cbPaper.SelectedItem as PaperItem;
+                if (pi != null) keep = pi.Size;
+                _cbPaper.BeginUpdate();
+                _cbPaper.Items.Clear();
+                foreach (PaperItem s in papers) _cbPaper.Items.Add(s);
+                _cbPaper.EndUpdate();
+                int p2 = 0;
+                if (keep != null)
+                    for (int i = 0; i < _cbPaper.Items.Count; i++)
+                        if (((PaperItem)_cbPaper.Items[i]).Size.PaperName == keep.PaperName) { p2 = i; break; }
+                _cbPaper.SelectedIndex = p2;
             }
-            _cbPaper.SelectedIndex = pick;
+            UpdateLayoutFromPaper();
+            BuildSheetList();
         }
 
         private void OnPrinterChanged()
         {
+            if (_syncingPrinter) return;
             if (_cbPrinter.SelectedItem != null) _printerName = (string)_cbPrinter.SelectedItem;
-            BuildPaperList();
-            UpdateLayoutFromPaper();
+            UpdateLayoutFromPaper();   // 先用缓存边距
             BuildSheetList();
+            RefreshPrinterInfo();      // 再后台拿这台打印机的纸张/边距
         }
 
         private void UpdateLayoutFromPaper()
@@ -404,20 +439,7 @@ namespace PdfTool
             if (h < 100) h = 1169;
             if (_rbLandscape.Checked) { double t = w; w = h; h = t; }
             _paperW = w; _paperH = h;
-
-            _marginL = 25; _marginT = 25;
-            try
-            {
-                if (_printerName.Length > 0)
-                {
-                    PrinterSettings p = new PrinterSettings();
-                    p.PrinterName = _printerName;
-                    RectangleF a = p.DefaultPageSettings.PrintableArea;
-                    if (a.X > 0) _marginL = a.X;
-                    if (a.Y > 0) _marginT = a.Y;
-                }
-            }
-            catch { }
+            // 硬边距由后台 RefreshPrinterInfo() 查好放 _marginL/_marginT，这里不碰打印机
         }
 
         private void SyncRangeUi()
@@ -500,10 +522,16 @@ namespace PdfTool
 
         // ---------------- 绘制 ----------------
 
-        // 当前张上每个内容的落点（1/100 英寸，相对纸左上角）
-        private List<RectangleF> ContentRects()
+        // 一张纸上的每个格：Cell=格子（可打印范围），Content=内容落点（1/100 英寸，相对纸左上角）
+        private struct SheetItem
         {
-            List<RectangleF> list = new List<RectangleF>();
+            public RectangleF Cell;
+            public RectangleF Content;
+        }
+
+        private List<SheetItem> ContentRects()
+        {
+            List<SheetItem> list = new List<SheetItem>();
             if (_sheets.Count == 0) return list;
             int[] sheet = _sheets[_index];
             double pw = _paperW - _marginL * 2, ph = _paperH - _marginT * 2;
@@ -520,11 +548,11 @@ namespace PdfTool
 
                 double srcW, srcH;
                 lock (_lock) { _job.PageSizeIn100(sheet[i], out srcW, out srcH); }
-                if (srcW < 1 || srcH < 1) { srcW = 595; srcH = 842; }   // 兜底 A4
+                if (srcW < 1 || srcH < 1) { srcW = 595; srcH = 842; }   // 兜底 A4（点）
 
                 double sc;
-                if (_rbActual.Checked) sc = 100.0 / 72.0;                       // 实际大小（1:1）
-                else if (_rbCustom.Checked) sc = (double)_numScale.Value / 100.0 * (100.0 / 72.0);
+                if (_rbActual.Checked) sc = 1.0;                                // 实际大小（1:1）
+                else if (_rbCustom.Checked) sc = (double)_numScale.Value / 100.0;
                 else sc = Math.Min(cellW / srcW, cellH / srcH);                  // 适合打印边距
                 if (sc <= 0 || double.IsNaN(sc) || double.IsInfinity(sc)) sc = 1;
 
@@ -537,7 +565,10 @@ namespace PdfTool
                     x = x0 + (cellW - w) / 2;
                     y = y0 + (cellH - h) / 2;
                 }
-                list.Add(new RectangleF((float)x, (float)y, (float)w, (float)h));
+                SheetItem it = new SheetItem();
+                it.Cell = new RectangleF((float)x0, (float)y0, (float)cellW, (float)cellH);
+                it.Content = new RectangleF((float)x, (float)y, (float)w, (float)h);
+                list.Add(it);
             }
             return list;
         }
@@ -572,13 +603,18 @@ namespace PdfTool
             }
 
             int[] sheet = _sheets[_index];
-            List<RectangleF> rects = ContentRects();
+            List<SheetItem> items = ContentRects();
             bool gray = _cbColor.SelectedIndex == 1;
-            for (int i = 0; i < sheet.Length && i < rects.Count; i++)
+            for (int i = 0; i < sheet.Length && i < items.Count; i++)
             {
-                RectangleF r = rects[i];
+                SheetItem it = items[i];
+                RectangleF r = it.Content;
                 float dx = px + r.X * s, dy = py + r.Y * s, dw = r.Width * s, dh = r.Height * s;
                 if (dw < 2 || dh < 2) continue;
+                // 只在"可打印范围（格子）"里画：实际大小超出纸面的部分会被裁掉，和真打印一致
+                RectangleF cell = new RectangleF(px + it.Cell.X * s, py + it.Cell.Y * s, it.Cell.Width * s, it.Cell.Height * s);
+                Region oldClip = g.Clip;
+                g.SetClip(cell, CombineMode.Intersect);
                 Bitmap bmp = null;
                 try
                 {
@@ -587,12 +623,13 @@ namespace PdfTool
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     g.DrawImage(bmp, dx, dy, dw, dh);
-                    g.DrawRectangle(Pens.Silver, dx, dy, dw, dh);
                 }
-                catch { }
                 finally { if (bmp != null) bmp.Dispose(); }
+                g.Clip = oldClip;
+                g.DrawRectangle(Pens.Silver, dx, dy, dw, dh);
             }
         }
+
 
         private static Bitmap ToGray(Bitmap src)
         {

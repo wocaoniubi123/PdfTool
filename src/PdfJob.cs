@@ -221,7 +221,12 @@ namespace PdfTool
         public void PageSizeIn100(int index, out double w, out double h)
         {
             PageRef p = Pages[index];
-            if (p.IsImage && p.Width > 0 && p.Height > 0) { w = p.Width; h = p.Height; return; }
+            if (p.IsImage && p.Width > 0 && p.Height > 0)
+            {
+                w = p.Width * 100.0 / 72.0;    // 这里存的是 PDF 点，换算成 1/100 英寸
+                h = p.Height * 100.0 / 72.0;
+                return;
+            }
             IntPtr page = Pdfium.FPDF_LoadPage(_doc, p.SrcIndex);
             if (page == IntPtr.Zero) { w = 595; h = 842; return; }   // 兜底 A4
             try
