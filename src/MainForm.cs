@@ -34,6 +34,7 @@ namespace PdfTool
         private bool _fastScroll;
         private int _shownSeq;                                       // 已经画到屏幕上的渲染序号（判断"这一页画完了没"）
         private Size _lastPageSize;            // 最近一次渲染出来的页面尺寸（占位页照它画）
+        private int _lastFastMs;              // 最近一次快渲染耗时（决定停手后要不要补高清）
         private readonly Queue<int> _wheelQueue = new Queue<int>();  // 待翻的步子（每项 ±1），一页一页走
         private Timer _wheelTimer;
         private int _lastStepMsg;       // 最近一次滚轮/方向键的时刻（判断"手停了没"）
@@ -212,11 +213,11 @@ namespace PdfTool
             Controls.Add(_lblStatus);
 
             _idleTimer = new Timer();
-            _idleTimer.Interval = 220;
+            _idleTimer.Interval = 130;
             _idleTimer.Tick += delegate
             {
                 _idleTimer.Stop();
-                if (_fastScroll) { _fastScroll = false; Render(); } // 停下后补一张高清
+                if (_fastScroll) { _fastScroll = false; if (_lastFastMs < 120) Render(); }   // 慢页不补高清，避免停手后又闪一次
             };
 
             _wheelTimer = new Timer();
@@ -734,7 +735,7 @@ namespace PdfTool
             if (w < 60) w = 60;
             if (h < 60) h = 60;
             // 命中缓存（滚回去的页）：直接复制上屏，不走渲染，也就不会闪占位页
-            Bitmap cahHit = CacheGet(_job.Pages[idx], w, h);
+            Bitmap cahHit = fast ? CacheGet(_job.Pages[idx], w, h) : null;   // 补高清时绕过缓存（否则永远补不上）
             if (cahHit != null)
             {
                 Bitmap cp = null;
@@ -760,12 +761,16 @@ namespace PdfTool
             System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
             {
                 Bitmap bmp = null;
+                if (seq != _renderSeq) return;   // 过时任务：碰锁之前就走，别把最新一页堵在队里
                 try
                 {
                     lock (_renderLock)
                     {
                         if (seq != _renderSeq) return;          // 已有更新的请求，别浪费
+                        System.Diagnostics.Stopwatch swF = System.Diagnostics.Stopwatch.StartNew();
                         bmp = _job.RenderPage(idx, w, h, fast);
+                        swF.Stop();
+                        _lastFastMs = (int)swF.ElapsedMilliseconds;
                     }
                 }
                 catch
