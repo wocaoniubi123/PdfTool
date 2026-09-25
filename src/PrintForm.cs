@@ -814,7 +814,7 @@ namespace PdfTool
                                 int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
                                 int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
                                 lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
-                                if (gray) bmp = ToGray(bmp);
+                                if (gray) bmp = To1bpp(bmp);   // 黑白打印：1bpp 点阵，spool 从 ~26MB/页降到 ~1.2MB/页
                                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                                 g.DrawImage(bmp, dx, dy, dw, dh);
@@ -858,6 +858,54 @@ namespace PdfTool
             }
             src.Dispose();
             return dst;
+        }
+
+        // 黑白（灰度）打印用：位图 → 1bpp 点阵（Floyd-Steinberg 抖动）。
+        // 激光打印机物理上就是黑白点阵；1bpp 位图在打印 spool（EMF）里只有 24bpp 的 1/24
+        // （300dpi 的 A4 一页从 ~26MB 降到 ~1.2MB），而观感基本一致。
+        // 注意 1bpp 默认调色板：索引 0=黑、1=白，所以"白点置 1"。
+        private static Bitmap To1bpp(Bitmap src)
+        {
+            int w = src.Width, h = src.Height;
+            Bitmap bw = new Bitmap(w, h, PixelFormat.Format1bppIndexed);
+            BitmapData sd = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            BitmapData dd = bw.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format1bppIndexed);
+            try
+            {
+                int sw = sd.Stride, dw = dd.Stride;
+                byte[] sline = new byte[sw];
+                byte[] dline = new byte[dw];
+                float[] err = new float[w + 2];
+                float[] nerr = new float[w + 2];
+                for (int y = 0; y < h; y++)
+                {
+                    System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(sd.Scan0, y * sw), sline, 0, sw);
+                    Array.Clear(dline, 0, dw);
+                    Array.Clear(nerr, 0, nerr.Length);
+                    for (int x = 0; x < w; x++)
+                    {
+                        int i3 = x * 3;
+                        float gray = 0.299f * sline[i3 + 2] + 0.587f * sline[i3 + 1] + 0.114f * sline[i3];
+                        float v = gray + err[x + 1];
+                        bool white = v >= 128f;
+                        if (white) dline[x >> 3] |= (byte)(0x80 >> (x & 7));
+                        float e = v - (white ? 255f : 0f);
+                        err[x + 2] += e * 7f / 16f;
+                        nerr[x] += e * 3f / 16f;
+                        nerr[x + 1] += e * 5f / 16f;
+                        nerr[x + 2] += e * 1f / 16f;
+                    }
+                    System.Runtime.InteropServices.Marshal.Copy(dline, 0, IntPtr.Add(dd.Scan0, y * dw), dw);
+                    float[] t = err; err = nerr; nerr = t;
+                }
+            }
+            finally
+            {
+                src.UnlockBits(sd);
+                bw.UnlockBits(dd);
+            }
+            src.Dispose();
+            return bw;
         }
 
         // 下拉里显示 "A4  (210 x 297 mm)" 这种
