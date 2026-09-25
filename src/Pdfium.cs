@@ -75,6 +75,14 @@ namespace PdfTool
         internal static extern void FPDF_RenderPageBitmap(IntPtr bitmap, IntPtr page, int startX, int startY,
             int sizeX, int sizeY, int rotate, int flags);
 
+        // 直接渲染到设备 DC（打印机 DC + EMF 打印模式 → 文字/矢量以 GDI 指令输出，spool 小）
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void FPDF_RenderPage(IntPtr hdc, IntPtr page, int startX, int startY,
+            int sizeX, int sizeY, int rotate, int flags);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int FPDF_SetPrintMode(int mode);
+
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void FPDFBitmap_Destroy(IntPtr bitmap);
 
@@ -172,5 +180,7 @@ namespace PdfTool
         internal const int BitmapBgra = 4;
         internal const int FlagAnnot = 0x01;
         internal const int FlagLcdText = 0x02;
+        internal const int FlagPrinting = 0x800;   // FPDF_RenderPage 打印用
+        internal const int PrintModeEmf = 0;       // FPDF_SetPrintMode：输出 EMF/GDI 指令（默认）
     }
 }

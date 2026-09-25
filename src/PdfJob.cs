@@ -263,6 +263,32 @@ namespace PdfTool
             }
         }
 
+        // 打印用：该页是不是"插入的图片页"（图片页没有 pdfium 页对象，走位图路径）
+        public bool PageIsImage(int index)
+        {
+            return Pages[index].IsImage;
+        }
+
+        // 打印用：把第 index 页直接渲染到打印机 DC（EMF 打印模式：文字/矢量以 GDI 指令
+        // 输出，spool 从"整页位图"几十 MB/页降到"内容级"~2.3MB/页，与看图软件同量级）。
+        // x/y/w/h 是设备像素（调用方按打印 DC 的 DPI 换算好）；rotate 传 0 保持与位图路径一致。
+        public void RenderPageToDc(IntPtr hdc, int index, int x, int y, int w, int h, int rotate)
+        {
+            if (index < 0 || index >= Pages.Count) throw new Exception("没有这一页。");
+            PageRef pref = Pages[index];
+            if (pref.IsImage) throw new Exception("图片页请走位图渲染路径。");
+            IntPtr page = Pdfium.FPDF_LoadPage(_doc, pref.SrcIndex);
+            if (page == IntPtr.Zero) throw new Exception("读取第 " + (index + 1) + " 页失败");
+            try
+            {
+                Pdfium.FPDF_RenderPage(hdc, page, x, y, w, h, rotate, Pdfium.FlagAnnot | Pdfium.FlagPrinting);
+            }
+            finally
+            {
+                Pdfium.FPDF_ClosePage(page);
+            }
+        }
+
         private Bitmap RenderImagePage(PageRef pref, int maxWidth, int maxHeight, bool fast)
         {
             return Render(IntPtr.Zero, pref.Width, pref.Height, maxWidth, maxHeight, pref, fast);

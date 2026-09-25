@@ -810,14 +810,44 @@ namespace PdfTool
                             Bitmap bmp = null;
                             try
                             {
-                                int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
-                                int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
-                                lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
-                                if (gray) bmp = To1bpp(bmp);   // 黑白打印：1bpp 点阵，spool 从 ~26MB/页降到 ~1.2MB/页
-                                g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
-                                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                                g.DrawImage(bmp, dx, dy, dw, dh);
+                                // 内容级打印：PDF 页 + 彩色模式 → pdfium 直接往打印机 DC 渲染
+                                //（EMF 模式：文字/矢量以 GDI 指令输出，spool ~2.3MB/页，不再是整页位图）
+                                if (!gray && !_job.PageIsImage(sheet[i]))
+                                {
+                                    float dpiX = g.DpiX, dpiY = g.DpiY;   // 必须在 GetHdc 之前取
+                                    int x = (int)Math.Round(dx / 100.0 * dpiX);
+                                    int y = (int)Math.Round(dy / 100.0 * dpiY);
+                                    int wpx = Math.Max(1, (int)Math.Round(dw / 100.0 * dpiX));
+                                    int hpx = Math.Max(1, (int)Math.Round(dh / 100.0 * dpiY));
+                                    int cl = (int)Math.Round((it.Cell.X - x0) / 100.0 * dpiX);
+                                    int ct = (int)Math.Round((it.Cell.Y - y0) / 100.0 * dpiY);
+                                    int cr = (int)Math.Round((it.Cell.X - x0 + it.Cell.Width) / 100.0 * dpiX);
+                                    int cb = (int)Math.Round((it.Cell.Y - y0 + it.Cell.Height) / 100.0 * dpiY);
+                                    IntPtr hdc = g.GetHdc();
+                                    IntPtr hrgn = IntPtr.Zero;
+                                    try
+                                    {
+                                        hrgn = CreateRectRgn(cl, ct, cr, cb);
+                                        SelectClipRgn(hdc, hrgn);
+                                        lock (_lock) { _job.RenderPageToDc(hdc, sheet[i], x, y, wpx, hpx, 0); }
+                                    }
+                                    finally
+                                    {
+                                        if (hrgn != IntPtr.Zero) DeleteObject(hrgn);
+                                        g.ReleaseHdc(hdc);
+                                    }
+                                }
+                                else
+                                {
+                                    int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
+                                    int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
+                                    lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
+                                    if (gray) bmp = To1bpp(bmp);   // 黑白打印：1bpp 点阵（位图路径）
+                                    g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
+                                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                    g.DrawImage(bmp, dx, dy, dw, dh);
+                                }
                             }
                             finally
                             {
@@ -828,6 +858,7 @@ namespace PdfTool
                         sheetIdx++;
                         e.HasMorePages = sheetIdx < _sheets.Count;
                     };
+                    lock (_lock) { Pdfium.FPDF_SetPrintMode(Pdfium.PrintModeEmf); }   // 内容级打印模式（幂等）
                     doc.Print();
                 }
                 // 发送成功就直接关掉预览窗口（失败走 catch，窗口留着看错误）
@@ -911,6 +942,14 @@ namespace PdfTool
         // 【已移除】彩色页曾用 GDI StretchDIBits(BI_JPEG) 直通压缩 spool：虚拟打印机
         // （Microsoft Print to PDF）会完整传递该记录，但本机 Deli 驱动不吃直通，真机打
         // 出来是纯白纸（2026-09-23 实测后回退）。教训：虚拟打印机的行为不能代表真实驱动。
+
+        // 内容级打印（FPDF_RenderPage 直渲打印机 DC）时，裁剪用 HDC 的 clip（GDI+ 的 SetClip 不作用于 GetHdc 后的 HDC）
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern int SelectClipRgn(IntPtr hdc, IntPtr hrgn);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr h);
 
         // 下拉里显示 "A4  (210 x 297 mm)" 这种
         private sealed class PaperItem
