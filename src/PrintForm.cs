@@ -767,6 +767,20 @@ namespace PdfTool
         // ---------------- 真打印 ----------------
 
         // 把当前设置送进打印机：排版和预览共用 ContentRects()，保证所见即所得
+        // 打印用：把"插入的图片页"合成成内存里的 PDF 快照（不落盘），这样它们也能走
+        // pdfium 内容级打印（EMF），而不是退回整页位图。返回 null 表示无需转换。
+        private PdfJob BuildSnapshotIfNeeded()
+        {
+            bool hasImage = false;
+            for (int s = 0; s < _sheets.Count && !hasImage; s++)
+                for (int i = 0; i < _sheets[s].Length; i++)
+                    if (_job.PageIsImage(_sheets[s][i])) { hasImage = true; break; }
+            if (!hasImage) return null;
+            byte[] bytes;
+            lock (_lock) { bytes = _job.SnapshotToMemory(); }
+            return PdfJob.LoadFromBytes(bytes);
+        }
+
         private void DoPrint()
         {
             if (_sheets.Count == 0)
@@ -776,6 +790,7 @@ namespace PdfTool
             }
             try
             {
+                PdfJob snap = BuildSnapshotIfNeeded();   // 有图片页时切到内存快照（页码与 _job 一致）
                 using (PrintDocument doc = new PrintDocument())
                 {
                     if (_printerName.Length > 0)
@@ -808,12 +823,13 @@ namespace PdfTool
                             if (dw < 1 || dh < 1) continue;
                             Region old = g.Clip;
                             Bitmap bmp = null;
+                            PdfJob src = snap != null ? snap : _job;   // 有快照就统一走快照（图片页已是真 PDF 页）
                             try
                             {
                                 // 内容级打印：PDF 页 → pdfium 直接往打印机 DC 渲染
                                 //（EMF 模式：文字/矢量以 GDI 指令输出，spool ~2.3MB/页，不再是整页位图；
                                 //  黑白模式用 FPDF_GRAYSCALE 灰度输出，同样走内容级）
-                                if (!_job.PageIsImage(sheet[i]))
+                                if (!src.PageIsImage(sheet[i]))
                                 {
                                     float dpiX = g.DpiX, dpiY = g.DpiY;   // 必须在 GetHdc 之前取
                                     int x = (int)Math.Round(dx / 100.0 * dpiX);
@@ -830,7 +846,7 @@ namespace PdfTool
                                     {
                                         hrgn = CreateRectRgn(cl, ct, cr, cb);
                                         SelectClipRgn(hdc, hrgn);
-                                        lock (_lock) { _job.RenderPageToDc(hdc, sheet[i], x, y, wpx, hpx, 0, gray); }
+                                        lock (_lock) { src.RenderPageToDc(hdc, sheet[i], x, y, wpx, hpx, 0, gray); }
                                     }
                                     finally
                                     {
@@ -843,7 +859,7 @@ namespace PdfTool
                                     // 插入的图片页：没有 pdfium 页对象，走位图路径（黑白 → 1bpp 点阵）
                                     int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
                                     int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
-                                    lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
+                                    lock (_lock) { bmp = src.RenderPage(sheet[i], pxW, pxH, false); }
                                     if (gray) bmp = To1bpp(bmp);
                                     g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
                                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -863,6 +879,7 @@ namespace PdfTool
                     lock (_lock) { Pdfium.FPDF_SetPrintMode(Pdfium.PrintModeEmf); }   // 内容级打印模式（幂等）
                     doc.Print();
                 }
+                if (snap != null) snap.Dispose();   // 内存快照用完即弃（不落盘）
                 // 发送成功就直接关掉预览窗口（失败走 catch，窗口留着看错误）
                 Close();
             }

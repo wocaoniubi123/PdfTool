@@ -123,6 +123,33 @@ namespace PdfTool
             return j;
         }
 
+        // 打印用：从内存字节打开一个 PDF（快照），全程不落盘
+        public static PdfJob LoadFromBytes(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) throw new Exception("空的 PDF 数据。");
+            PdfJob j = new PdfJob();
+            j.SourcePath = null;
+            j._bytes = bytes;
+            j._pin = GCHandle.Alloc(j._bytes, GCHandleType.Pinned);
+            j._doc = Pdfium.FPDF_LoadMemDocument(j._pin.AddrOfPinnedObject(), j._bytes.Length, null);
+            if (j._doc == IntPtr.Zero)
+            {
+                uint err = Pdfium.FPDF_GetLastError();
+                j._pin.Free();
+                throw new Exception("打不开内存快照（错误码 " + err + "）");
+            }
+            int n = Pdfium.FPDF_GetPageCount(j._doc);
+            if (n <= 0) throw new Exception("内存快照没有任何页面。");
+            j.Pages = new List<PageRef>();
+            for (int i = 0; i < n; i++)
+            {
+                PageRef p = new PageRef();
+                p.SrcIndex = i;
+                j.Pages.Add(p);
+            }
+            return j;
+        }
+
         // 把一张图片做成"图片页"：页面尺寸照当前页（点），内容居中按比例缩放
         public static PageRef MakeImagePage(string file, SizeF target)
         {
@@ -905,36 +932,27 @@ namespace PdfTool
                     if (!p.IsImage) continue;
                     if (p.PngIdat != null)
                     {
-                        string mpg = MiniPdf.BuildPngImagePage(p.PngIdat, p.PxW, p.PxH, p.PngComps, p.PngBpc,
+                        byte[] mpg = MiniPdf.BuildPngImagePage(p.PngIdat, p.PxW, p.PxH, p.PngComps, p.PngBpc,
                             p.PngIcc, p.Width, p.Height);
-                        try { ImportOnePage(work, mpg, i); }
-                        finally { try { File.Delete(mpg); } catch { } }
+                        ImportOnePage(work, mpg, i);
                         continue;
                     }
                     if (p.Alpha != null && p.Pixels != null)
                     {
-                        string mp = MiniPdf.BuildImagePage(p.Pixels, p.Alpha, p.PxW, p.PxH, p.Width, p.Height);
+                        byte[] mb = MiniPdf.BuildImagePage(p.Pixels, p.Alpha, p.PxW, p.PxH, p.Width, p.Height);
+                        GCHandle pin2 = GCHandle.Alloc(mb, GCHandleType.Pinned);
                         try
                         {
-                            byte[] mb = File.ReadAllBytes(mp);
-                            GCHandle pin2 = GCHandle.Alloc(mb, GCHandleType.Pinned);
+                            IntPtr mini = Pdfium.FPDF_LoadMemDocument(pin2.AddrOfPinnedObject(), mb.Length, null);
+                            if (mini == IntPtr.Zero) throw new Exception("透明图片页生成失败");
                             try
                             {
-                                IntPtr mini = Pdfium.FPDF_LoadMemDocument(pin2.AddrOfPinnedObject(), mb.Length, null);
-                                if (mini == IntPtr.Zero) throw new Exception("透明图片页生成失败");
-                                try
-                                {
-                                    if (Pdfium.FPDF_ImportPages(work, mini, "1", i) == 0)
-                                        throw new Exception("导入透明图片页失败");
-                                }
-                                finally { Pdfium.FPDF_CloseDocument(mini); }
+                                if (Pdfium.FPDF_ImportPages(work, mini, "1", i) == 0)
+                                    throw new Exception("导入透明图片页失败");
                             }
-                            finally { pin2.Free(); }
+                            finally { Pdfium.FPDF_CloseDocument(mini); }
                         }
-                        finally
-                        {
-                            try { File.Delete(mp); } catch { }
-                        }
+                        finally { pin2.Free(); }
                         continue;
                     }
                     IntPtr np = Pdfium.FPDFPage_New(work, i, p.Width, p.Height);
@@ -962,8 +980,38 @@ namespace PdfTool
         // 从零构建（新建的空白 PDF 用）：先写 .tmp 再替换，避免写坏已有文件
         private void SaveFresh(string outPath, IList<PageRef> pages)
         {
-            if (pages.Count == 0) throw new Exception("没有页面可保存。");
             string tmp = outPath + ".tmp";
+            IntPtr dest = BuildFreshDoc(pages);
+            try
+            {
+                WriteDoc(dest, tmp);
+            }
+            catch
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); }
+                catch { }
+                throw;
+            }
+            finally
+            {
+                Pdfium.FPDF_CloseDocument(dest);
+            }
+            if (File.Exists(outPath)) File.Delete(outPath);
+            File.Move(tmp, outPath);
+        }
+
+        // 打印用：把当前页面列表构建成内存里的 PDF（不落盘），用于"图片页 → 真 PDF 页"的转换
+        public byte[] SnapshotToMemory()
+        {
+            IntPtr dest = BuildFreshDoc(Pages);
+            try { return WriteDocBytes(dest); }
+            finally { Pdfium.FPDF_CloseDocument(dest); }
+        }
+
+        // 从零构建一个文档（返回新文档，调用方负责关闭）：图片页/PDF 页逐页拼装
+        private IntPtr BuildFreshDoc(IList<PageRef> pages)
+        {
+            if (pages.Count == 0) throw new Exception("没有页面可保存。");
             IntPtr dest = Pdfium.FPDF_CreateNewDocument();
             if (dest == IntPtr.Zero) throw new Exception("无法创建新 PDF。");
             try
@@ -974,36 +1022,27 @@ namespace PdfTool
                     if (p.IsImage && p.PngIdat != null)
                     {
                         // PNG 原样嵌入（16 位/ICC 保真）
-                        string mpg = MiniPdf.BuildPngImagePage(p.PngIdat, p.PxW, p.PxH, p.PngComps, p.PngBpc,
+                        byte[] mpg = MiniPdf.BuildPngImagePage(p.PngIdat, p.PxW, p.PxH, p.PngComps, p.PngBpc,
                             p.PngIcc, p.Width, p.Height);
-                        try { ImportOnePage(dest, mpg, i); }
-                        finally { try { File.Delete(mpg); } catch { } }
+                        ImportOnePage(dest, mpg, i);
                     }
                     else if (p.IsImage && p.Alpha != null && p.Pixels != null)
                     {
                         // 带透明通道：用自写的小 PDF（含 SMask）导入，保住透明
-                        string mp = MiniPdf.BuildImagePage(p.Pixels, p.Alpha, p.PxW, p.PxH, p.Width, p.Height);
+                        byte[] mb = MiniPdf.BuildImagePage(p.Pixels, p.Alpha, p.PxW, p.PxH, p.Width, p.Height);
+                        GCHandle pin2 = GCHandle.Alloc(mb, GCHandleType.Pinned);
                         try
                         {
-                            byte[] mb = File.ReadAllBytes(mp);
-                            GCHandle pin2 = GCHandle.Alloc(mb, GCHandleType.Pinned);
+                            IntPtr mini = Pdfium.FPDF_LoadMemDocument(pin2.AddrOfPinnedObject(), mb.Length, null);
+                            if (mini == IntPtr.Zero) throw new Exception("透明图片页生成失败");
                             try
                             {
-                                IntPtr mini = Pdfium.FPDF_LoadMemDocument(pin2.AddrOfPinnedObject(), mb.Length, null);
-                                if (mini == IntPtr.Zero) throw new Exception("透明图片页生成失败");
-                                try
-                                {
-                                    if (Pdfium.FPDF_ImportPages(dest, mini, "1", i) == 0)
-                                        throw new Exception("导入透明图片页失败");
-                                }
-                                finally { Pdfium.FPDF_CloseDocument(mini); }
+                                if (Pdfium.FPDF_ImportPages(dest, mini, "1", i) == 0)
+                                    throw new Exception("导入透明图片页失败");
                             }
-                            finally { pin2.Free(); }
+                            finally { Pdfium.FPDF_CloseDocument(mini); }
                         }
-                        finally
-                        {
-                            try { File.Delete(mp); } catch { }
-                        }
+                        finally { pin2.Free(); }
                     }
                     else if (p.IsImage)
                     {
@@ -1025,26 +1064,18 @@ namespace PdfTool
                             throw new Exception("复制原第 " + (p.SrcIndex + 1) + " 页失败");
                     }
                 }
-                WriteDoc(dest, tmp);
+                return dest;
             }
             catch
             {
-                try { if (File.Exists(tmp)) File.Delete(tmp); }
-                catch { }
+                Pdfium.FPDF_CloseDocument(dest);
                 throw;
             }
-            finally
-            {
-                Pdfium.FPDF_CloseDocument(dest);
-            }
-            if (File.Exists(outPath)) File.Delete(outPath);
-            File.Move(tmp, outPath);
         }
 
-        // 把外部小 PDF 的第 1 页导入到 dest 的第 index 位（用于 PNG 原样嵌入）
-        private static void ImportOnePage(IntPtr dest, string pdfPath, int index)
+        // 把外部小 PDF 的第 1 页导入到 dest 的第 index 位（用于 PNG 原样嵌入；数据在内存里）
+        private static void ImportOnePage(IntPtr dest, byte[] mb, int index)
         {
-            byte[] mb = File.ReadAllBytes(pdfPath);
             GCHandle pin2 = GCHandle.Alloc(mb, GCHandleType.Pinned);
             try
             {
@@ -1171,6 +1202,35 @@ namespace PdfTool
                 int ok = Pdfium.FPDF_SaveAsCopy(doc, ref fw, 0);
                 GC.KeepAlive(cb);
                 if (ok == 0) throw new Exception("写入文件失败：" + path);
+            }
+        }
+
+        // 打印用：把文档存成内存字节（同样不落盘）
+        private static byte[] WriteDocBytes(IntPtr doc)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                Pdfium.WriteBlockDelegate cb = delegate(IntPtr self, IntPtr data, uint size)
+                {
+                    try
+                    {
+                        byte[] block = new byte[(int)size];
+                        Marshal.Copy(data, block, 0, (int)size);
+                        ms.Write(block, 0, (int)size);
+                        return 1;
+                    }
+                    catch
+                    {
+                        return 0;
+                    }
+                };
+                Pdfium.FPDF_FILEWRITE fw = new Pdfium.FPDF_FILEWRITE();
+                fw.version = 1;
+                fw.WriteBlock = Marshal.GetFunctionPointerForDelegate(cb);
+                int ok = Pdfium.FPDF_SaveAsCopy(doc, ref fw, 0);
+                GC.KeepAlive(cb);
+                if (ok == 0) throw new Exception("生成内存快照失败");
+                return ms.ToArray();
             }
         }
 
