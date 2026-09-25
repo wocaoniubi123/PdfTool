@@ -807,17 +807,27 @@ namespace PdfTool
                             float dw = it.Content.Width, dh = it.Content.Height;
                             if (dw < 1 || dh < 1) continue;
                             Region old = g.Clip;
-                            g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
                             Bitmap bmp = null;
                             try
                             {
                                 int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
                                 int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
                                 lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
-                                if (gray) bmp = To1bpp(bmp);   // 黑白打印：1bpp 点阵，spool 从 ~26MB/页降到 ~1.2MB/页
-                                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                                g.DrawImage(bmp, dx, dy, dw, dh);
+                                if (gray)
+                                {
+                                    // 黑白打印：1bpp 点阵，spool 从 ~26MB/页降到 ~1.2MB/页
+                                    bmp = To1bpp(bmp);
+                                    g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
+                                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                    g.DrawImage(bmp, dx, dy, dw, dh);
+                                }
+                                else
+                                {
+                                    // 彩色打印：JPEG 直通，spool 从 ~26MB/页降到 ~0.6MB/页；
+                                    // 裁剪在 DrawJpegDirect 里用 HDC 的 clip 做（不走 GDI+ 的 SetClip）
+                                    DrawJpegDirect(g, bmp, dx, dy, it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height);
+                                }
                             }
                             finally
                             {
@@ -906,6 +916,95 @@ namespace PdfTool
             }
             src.Dispose();
             return bw;
+        }
+
+        // ---- 彩色页 JPEG 直通 ----
+        // GDI 的 StretchDIBits(BI_JPEG) 会把 JPEG 原样写进打印数据（EMF），而不是解压成
+        // 整页位图（300dpi 的 A4 一页 ~26MB → ~0.6MB；与 2345 看图王打印同一机制，实测
+        // 打印链会完整传递该记录）。注意点：
+        //  1) dest 尺寸必须等于位图像素尺寸（1:1），缩放会破坏直通
+        //  2) dpi/坐标要在 GetHdc 之前算好，GetHdc 之后不能碰 Graphics 属性
+        //  3) 裁剪用 HDC 的 SelectClipRgn（GDI+ 的 clip 不走这条路）
+        private const int BI_JPEG = 4;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct BmiHeader
+        {
+            public int biSize;
+            public int biWidth;
+            public int biHeight;
+            public short biPlanes;
+            public short biBitCount;
+            public int biCompression;
+            public int biSizeImage;
+            public int biXPelsPerMeter;
+            public int biYPelsPerMeter;
+            public int biClrUsed;
+            public int biClrImportant;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct RgbQuad { public byte b; public byte g; public byte r; public byte a; }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct Bmi { public BmiHeader h; public RgbQuad c; }
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern int StretchDIBits(IntPtr hdc, int xDest, int yDest, int wDest, int hDest,
+            int xSrc, int ySrc, int wSrc, int hSrc, byte[] bits, ref Bmi bmi, uint usage, uint rop);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern int SelectClipRgn(IntPtr hdc, IntPtr hrgn);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr h);
+
+        // dx/dy/cell* 单位都是 1/100 英寸（相对打印原点），内部换算成设备像素
+        private static void DrawJpegDirect(Graphics g, Bitmap bmp, double dx, double dy,
+            double cellL, double cellT, double cellW, double cellH)
+        {
+            byte[] jpeg;
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ImageCodecInfo enc = null;
+                foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders())
+                    if (c.FormatID == ImageFormat.Jpeg.Guid) { enc = c; break; }
+                EncoderParameters ep = new EncoderParameters(1);
+                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 85L);
+                bmp.Save(ms, enc, ep);
+                jpeg = ms.ToArray();
+            }
+            float px = g.DpiX / 100f;   // 1/100 英寸 → 设备像素
+            float py = g.DpiY / 100f;
+            int xD = (int)Math.Round(dx * px);
+            int yD = (int)Math.Round(dy * py);
+            IntPtr hdc = g.GetHdc();
+            IntPtr hrgn = IntPtr.Zero;
+            try
+            {
+                if (cellW > 0 && cellH > 0)
+                {
+                    hrgn = CreateRectRgn(
+                        (int)Math.Round(cellL * px), (int)Math.Round(cellT * py),
+                        (int)Math.Round((cellL + cellW) * px), (int)Math.Round((cellT + cellH) * py));
+                    SelectClipRgn(hdc, hrgn);
+                }
+                Bmi bmi = new Bmi();
+                bmi.h.biSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(BmiHeader));
+                bmi.h.biWidth = bmp.Width;
+                bmi.h.biHeight = -bmp.Height;   // top-down
+                bmi.h.biPlanes = 1;
+                bmi.h.biBitCount = 24;
+                bmi.h.biCompression = BI_JPEG;
+                bmi.h.biSizeImage = jpeg.Length;
+                StretchDIBits(hdc, xD, yD, bmp.Width, bmp.Height, 0, 0, bmp.Width, bmp.Height,
+                    jpeg, ref bmi, 0, 0x00CC0020);   // SRCCOPY
+            }
+            finally
+            {
+                if (hrgn != IntPtr.Zero) DeleteObject(hrgn);
+                g.ReleaseHdc(hdc);
+            }
         }
 
         // 下拉里显示 "A4  (210 x 297 mm)" 这种
