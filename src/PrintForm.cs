@@ -810,9 +810,10 @@ namespace PdfTool
                             Bitmap bmp = null;
                             try
                             {
-                                // 内容级打印：PDF 页 + 彩色模式 → pdfium 直接往打印机 DC 渲染
-                                //（EMF 模式：文字/矢量以 GDI 指令输出，spool ~2.3MB/页，不再是整页位图）
-                                if (!gray && !_job.PageIsImage(sheet[i]))
+                                // 内容级打印：PDF 页 → pdfium 直接往打印机 DC 渲染
+                                //（EMF 模式：文字/矢量以 GDI 指令输出，spool ~2.3MB/页，不再是整页位图；
+                                //  黑白模式用 FPDF_GRAYSCALE 灰度输出，同样走内容级）
+                                if (!_job.PageIsImage(sheet[i]))
                                 {
                                     float dpiX = g.DpiX, dpiY = g.DpiY;   // 必须在 GetHdc 之前取
                                     int x = (int)Math.Round(dx / 100.0 * dpiX);
@@ -829,7 +830,7 @@ namespace PdfTool
                                     {
                                         hrgn = CreateRectRgn(cl, ct, cr, cb);
                                         SelectClipRgn(hdc, hrgn);
-                                        lock (_lock) { _job.RenderPageToDc(hdc, sheet[i], x, y, wpx, hpx, 0); }
+                                        lock (_lock) { _job.RenderPageToDc(hdc, sheet[i], x, y, wpx, hpx, 0, gray); }
                                     }
                                     finally
                                     {
@@ -839,10 +840,11 @@ namespace PdfTool
                                 }
                                 else
                                 {
+                                    // 插入的图片页：没有 pdfium 页对象，走位图路径（黑白 → 1bpp 点阵）
                                     int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
                                     int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
                                     lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
-                                    if (gray) bmp = To1bpp(bmp);   // 黑白打印：1bpp 点阵（位图路径）
+                                    if (gray) bmp = To1bpp(bmp);
                                     g.SetClip(new RectangleF(it.Cell.X - x0, it.Cell.Y - y0, it.Cell.Width, it.Cell.Height));
                                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;

@@ -181,6 +181,7 @@ namespace PdfTool
         internal const int FlagAnnot = 0x01;
         internal const int FlagLcdText = 0x02;
         internal const int FlagPrinting = 0x800;   // FPDF_RenderPage 打印用
+        internal const int FlagGrayScale = 0x08;   // 灰度渲染（黑白打印用）
         internal const int PrintModeEmf = 0;       // FPDF_SetPrintMode：输出 EMF/GDI 指令（默认）
     }
 }

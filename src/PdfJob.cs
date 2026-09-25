@@ -272,7 +272,8 @@ namespace PdfTool
         // 打印用：把第 index 页直接渲染到打印机 DC（EMF 打印模式：文字/矢量以 GDI 指令
         // 输出，spool 从"整页位图"几十 MB/页降到"内容级"~2.3MB/页，与看图软件同量级）。
         // x/y/w/h 是设备像素（调用方按打印 DC 的 DPI 换算好）；rotate 传 0 保持与位图路径一致。
-        public void RenderPageToDc(IntPtr hdc, int index, int x, int y, int w, int h, int rotate)
+        // gray=true 时用灰度渲染（黑白打印：内容级仍输出矢量，不做整页点阵化）。
+        public void RenderPageToDc(IntPtr hdc, int index, int x, int y, int w, int h, int rotate, bool gray)
         {
             if (index < 0 || index >= Pages.Count) throw new Exception("没有这一页。");
             PageRef pref = Pages[index];
@@ -281,7 +282,9 @@ namespace PdfTool
             if (page == IntPtr.Zero) throw new Exception("读取第 " + (index + 1) + " 页失败");
             try
             {
-                Pdfium.FPDF_RenderPage(hdc, page, x, y, w, h, rotate, Pdfium.FlagAnnot | Pdfium.FlagPrinting);
+                int flags = Pdfium.FlagAnnot | Pdfium.FlagPrinting;
+                if (gray) flags |= Pdfium.FlagGrayScale;
+                Pdfium.FPDF_RenderPage(hdc, page, x, y, w, h, rotate, flags);
             }
             finally
             {
