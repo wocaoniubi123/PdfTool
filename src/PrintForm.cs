@@ -14,6 +14,10 @@ namespace PdfTool
     internal sealed class PrintForm : Form
     {
 
+        // 打印位图分辨率上限：spool 大小与像素数成正比（600dpi 时 6 页 470MB），
+        // 300dpi 已是扫描素材的自然分辨率，再高只是超采样（参考看图软件的打印参数）
+        private const int PrintDpiCap = 300;
+
         private readonly PdfJob _job;
         private readonly object _lock;
         private readonly int _startPage;   // 主界面当前页（"当前页"范围的默认值）
@@ -807,8 +811,8 @@ namespace PdfTool
                             Bitmap bmp = null;
                             try
                             {
-                                int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * g.DpiX));
-                                int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * g.DpiY));
+                                int pxW = Math.Max(1, (int)Math.Round(dw / 100.0 * Math.Min(g.DpiX, PrintDpiCap)));
+                                int pxH = Math.Max(1, (int)Math.Round(dh / 100.0 * Math.Min(g.DpiY, PrintDpiCap)));
                                 lock (_lock) { bmp = _job.RenderPage(sheet[i], pxW, pxH, false); }
                                 if (gray) bmp = ToGray(bmp);
                                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
