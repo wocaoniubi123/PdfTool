@@ -5,6 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Printing;
 using System.IO;
+using System.Text;
 using System.Windows.Forms;
 
 namespace PdfTool
@@ -194,7 +195,7 @@ namespace PdfTool
             g3.Controls.Add(_rbRangeRange);
             _txtRange = new TextBox();
             _txtRange.SetBounds(12, 50, 130, 24);
-            _txtRange.Text = "1-" + Math.Max(1, _job.PageCount);
+            _txtRange.Text = (Math.Min(Math.Max(_startPage, 0), Math.Max(0, _job.PageCount - 1)) + 1).ToString();   // 默认当前页
             _txtRange.Enabled = false;
             _txtRange.TextChanged += delegate { BuildSheetList(); };
             g3.Controls.Add(_txtRange);
@@ -592,35 +593,19 @@ namespace PdfTool
         {
             _pages.Clear();
             int total = _job.PageCount;
-            int from = 0, to = total - 1;
-            if (_rbRangeCur.Checked) from = to = Math.Min(Math.Max(_startPage, 0), total - 1);
-            else if (_rbRangeRange.Checked)
+            if (_rbRangeCur.Checked)
             {
-                from = -1; to = -1;
-                foreach (string part in _txtRange.Text.Split(','))
-                {
-                    string p = part.Trim();
-                    if (p.Length == 0) continue;
-                    int dash = p.IndexOf('-');
-                    int a, b;
-                    if (dash > 0 && int.TryParse(p.Substring(0, dash), out a) && int.TryParse(p.Substring(dash + 1), out b)) { }
-                    else if (int.TryParse(p, out a)) b = a;
-                    else continue;
-                    if (a < 1) a = 1;
-                    if (b > total) b = total;
-                    if (a > b) continue;
-                    if (from < 0 || a - 1 < from) from = a - 1;
-                    if (b - 1 > to) to = b - 1;
-                }
-                if (from < 0) { from = 0; to = -1; }
+                int cur = Math.Min(Math.Max(_startPage, 0), total - 1);
+                if (cur >= 0) _pages.Add(cur);
             }
-            for (int i = from; i <= to && i < total; i++)
+            else if (_rbRangeRange.Checked)
+                _pages.AddRange(ParsePageSpec(_txtRange.Text, total));
+            else
+                for (int i = 0; i < total; i++) _pages.Add(i);
+            for (int i = _pages.Count - 1; i >= 0; i--)
             {
-                if (i < 0) continue;
-                bool odd = ((i + 1) % 2) == 1;
-                if (_rbOdd.Checked && !odd) continue;
-                if (_rbEven.Checked && odd) continue;
-                _pages.Add(i);
+                bool odd = ((_pages[i] + 1) % 2) == 1;
+                if ((_rbOdd.Checked && !odd) || (_rbEven.Checked && odd)) _pages.RemoveAt(i);
             }
             _sheets.Clear();
             int per = _cbLayout.SelectedIndex == 0 ? 1 : (_cbLayout.SelectedIndex == 1 ? 2 : 4);
@@ -634,6 +619,42 @@ namespace PdfTool
             if (_index >= _sheets.Count) _index = Math.Max(0, _sheets.Count - 1);
             UpdatePageBox();
             if (_canvas != null) _canvas.Invalidate();
+        }
+
+        // "1,3-5" → 0 基页号，按输入顺序、去重；空项/非法项/越界段忽略
+        internal static List<int> ParsePageSpec(string spec, int total)
+        {
+            List<int> list = new List<int>();
+            foreach (string part in NormalizeSpec(spec).Split(','))
+            {
+                string p = part.Trim();
+                if (p.Length == 0) continue;
+                int dash = p.IndexOf('-');
+                int a, b;
+                if (dash > 0 && int.TryParse(p.Substring(0, dash), out a) && int.TryParse(p.Substring(dash + 1), out b)) { }
+                else if (int.TryParse(p, out a)) b = a;
+                else continue;
+                if (a < 1) a = 1;
+                if (b > total) b = total;
+                if (a > b) continue;
+                for (int i = a - 1; i < b; i++)
+                    if (!list.Contains(i)) list.Add(i);
+            }
+            return list;
+        }
+
+        // 输入归一化：保留 0-9 与 -；全角数字转半角、全角/长减号一律算 -；其余字符（，。、；空格 换行 …）全当分隔符
+        internal static string NormalizeSpec(string spec)
+        {
+            StringBuilder b = new StringBuilder(spec.Length + 8);
+            foreach (char c in spec)
+            {
+                if (c >= '0' && c <= '9') b.Append(c);
+                else if (c >= '\uFF10' && c <= '\uFF19') b.Append((char)(c - 0xFEE0));          // 全角数字
+                else if (c == '-' || c == '\uFF0D' || c == '\u2212' || c == '\u2013' || c == '\u2014') b.Append('-');
+                else b.Append(',');
+            }
+            return b.ToString();
         }
 
         private void Go(int sheet)
