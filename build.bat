@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 set "CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if not exist "%CSC%" (
-  echo 找不到系统自带的 C# 编译器：%CSC%
+  echo �Ҳ���ϵͳ�Դ��� C# ��������%CSC%
   pause
   exit /b 1
 )
@@ -11,10 +11,10 @@ if not exist "%CSC%" (
   src\*.cs
 if errorlevel 1 (
   echo.
-  echo 编译失败，请把上面的错误发给我。
+  echo ����ʧ�ܣ��������Ĵ��󷢸��ҡ�
   pause
   exit /b 1
 )
 echo.
-echo 编译完成：%CD%\PdfTool.exe
+echo ������ɣ�%CD%\PdfTool.exe
 pause
