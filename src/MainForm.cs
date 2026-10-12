@@ -38,6 +38,14 @@ namespace PdfTool
         private Size _lastPageSize;            // 最近一次渲染出来的页面尺寸（占位页照它画）
         private int _lastFastMs;              // 最近一次快渲染耗时（决定停手后要不要补高清）
         private int _shownPage = -1;         // 当前屏幕上显示的是哪一页（同页重渲染不该显示占位页）
+        private double _zoom = 1.0;          // 预览缩放（1.0 = 100%）：Ctrl+滚轮调节
+        private double _previewZoom = 1.0;   // 当前 _preview 位图是按哪个缩放渲染出来的
+        private Point _panOffset = Point.Empty;   // 放大后拖动产生的平移量（屏幕像素）
+        private bool _panning;               // 正在按住拖动预览图
+        private Point _panStart;             // 拖动起点（客户区坐标）
+        private Point _panStartOffset;       // 拖动开始时的平移量
+        private bool _panMoved;              // 本次按住是否真的拖过（区分"双击还原"和"拖动"）
+        private Label _lblZoom;              // 右下角缩放比例标签（100% 时隐藏）
         private readonly Queue<int> _wheelQueue = new Queue<int>();  // 待翻的步子（每项 ±1），一页一页走
         private Timer _wheelTimer;
         private int _lastStepMsg;       // 最近一次滚轮/方向键的时刻（判断"手停了没"）
@@ -45,6 +53,12 @@ namespace PdfTool
         private CheckBox _chkDesktop;   // 输出位置：桌面
         private CheckBox _chkLocal;     // 输出位置：源文件目录
         private bool _syncingMode;
+
+        // 缩放：Ctrl+滚轮每格 ×1.25，范围 25%~1000%（放大走"重新渲染"，不是把位图拉大）
+        private const double ZoomMin = 0.25;
+        private const double ZoomMax = 10.0;
+        private const double ZoomStep = 1.25;
+        private const long ZoomPixelBudget = 60000000;   // 放大后渲染像素封顶（≈240MB 位图）：更高倍率时自动降清晰度，显示尺寸不受影响
 
         private const string HintOpenDoc = "把 PDF 文件拖到这里\r\n\r\n（在图上点右键：删页 / 复制 / 上移下移 / 插入图片）";
         private const string HintNewDoc = "新 PDF（保存到桌面）\r\n\r\n把图片拖进来，或在图上点右键 → 插入图片";
@@ -183,13 +197,28 @@ namespace PdfTool
             bar.Controls.Add(navGroup, 1, 0);
             bar.Controls.Add(toolGroup, 2, 0);
 
+            Panel statusBar = new Panel();   // 底部状态栏：左边状态文字、右边缩放比例
+            statusBar.Dock = DockStyle.Bottom;
+            statusBar.Height = 26;
+            statusBar.BackColor = Color.FromArgb(250, 250, 250);
+
             _lblStatus = new Label();
-            _lblStatus.Dock = DockStyle.Bottom;
-            _lblStatus.Height = 26;
+            _lblStatus.Dock = DockStyle.Fill;                 // Fill 先加、Right 后加（停靠按集合末尾往前处理）
             _lblStatus.TextAlign = ContentAlignment.MiddleLeft;
             _lblStatus.Padding = new Padding(12, 0, 0, 0);
             _lblStatus.BackColor = Color.FromArgb(250, 250, 250);
             _lblStatus.Text = "把 PDF 拖进来打开；也可以点「新建 PDF」后把图片拖进来。";
+            statusBar.Controls.Add(_lblStatus);
+
+            // 缩放比例：窗口右下角显示，100% 时隐藏（Ctrl+滚轮缩放、Ctrl+0 还原）
+            _lblZoom = new Label();
+            _lblZoom.Dock = DockStyle.Right;
+            _lblZoom.Width = 96;
+            _lblZoom.TextAlign = ContentAlignment.MiddleRight;
+            _lblZoom.Padding = new Padding(0, 0, 12, 0);
+            _lblZoom.BackColor = Color.FromArgb(250, 250, 250);
+            _lblZoom.Visible = false;
+            statusBar.Controls.Add(_lblZoom);
 
             _view = new PreviewBox();
             _view.Dock = DockStyle.Fill;
@@ -210,6 +239,9 @@ namespace PdfTool
             _hint.DragEnter += OnDragEnter;
             _hint.DragDrop += OnDragDrop;
             _view.Paint += OnViewPaint;
+            _view.MouseDown += OnViewMouseDown;
+            _view.MouseMove += OnViewMouseMove;
+            _view.MouseUp += OnViewMouseUp;
             _view.Controls.Add(_hint);
 
             _menu = new ContextMenuStrip();
@@ -226,7 +258,7 @@ namespace PdfTool
 
             Controls.Add(_view);
             Controls.Add(bar);
-            Controls.Add(_lblStatus);
+            Controls.Add(statusBar);
 
             _idleTimer = new Timer();
             _idleTimer.Interval = 130;
@@ -246,7 +278,7 @@ namespace PdfTool
 
             _resizeTimer = new Timer();
             _resizeTimer.Interval = 200;
-            _resizeTimer.Tick += delegate { _resizeTimer.Stop(); Render(); };
+            _resizeTimer.Tick += delegate { _resizeTimer.Stop(); ClampPan(); Render(); };
             _view.Resize += delegate
             {
                 if (_job == null || _job.PageCount == 0) return;
@@ -396,11 +428,133 @@ namespace PdfTool
         private void OnViewPaint(object sender, PaintEventArgs e)
         {
             if (_preview == null) { DrawPlaceholder(e.Graphics); return; }   // 还没画好 → 占位页
-            int x = (_view.ClientSize.Width - _preview.Width) / 2;
-            int y = (_view.ClientSize.Height - _preview.Height) / 2;
+            // 位图是按 _previewZoom 渲染的、屏幕上要按 _zoom 显示：两者不等时先垫着旧图（渲染好了会被替换）
+            double s = _previewZoom > 0 ? _zoom / _previewZoom : 1.0;
+            int dw = (int)Math.Round(_preview.Width * s);
+            int dh = (int)Math.Round(_preview.Height * s);
+            if (dw < 1) dw = 1;
+            if (dh < 1) dh = 1;
+            int x = (_view.ClientSize.Width - dw) / 2 + _panOffset.X;
+            int y = (_view.ClientSize.Height - dh) / 2 + _panOffset.Y;
             e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
             e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-            e.Graphics.DrawImageUnscaled(_preview, x, y);
+            if (dw == _preview.Width && dh == _preview.Height) e.Graphics.DrawImageUnscaled(_preview, x, y);   // 1:1 走原路径
+            else e.Graphics.DrawImage(_preview, new Rectangle(x, y, dw, dh));
+        }
+
+        // ---------------- 缩放 / 拖动 ----------------
+        // Ctrl+滚轮缩放（25%~1000%）；放大后按住左键拖动看图；翻页回 100%。
+        // 放大走"重新渲染"（渲染尺寸 × _zoom），不是把已有位图拉大——这样放大后看到的是真细节。
+
+        internal void ZoomBy(int dir, Point screenPt)
+        {
+            if (_job == null || _job.PageCount == 0) return;
+            _wheelQueue.Clear();          // 缩放优先：停掉还在排队的翻页（否则翻页会把刚设的缩放重置掉）
+            _wheelTimer.Stop();
+            double old = _zoom;
+            double z = dir > 0 ? Math.Min(ZoomMax, old * ZoomStep) : Math.Max(ZoomMin, old / ZoomStep);
+            if (Math.Abs(z - old) < 0.0001) return;   // 已经到头
+
+            // 以鼠标位置为锚点：滚轮指向的那一点尽量停在鼠标下（连滚几格不会跑偏）
+            Point m = _view.PointToClient(screenPt);
+            if (_preview != null && _previewZoom > 0)
+            {
+                int cw = _view.ClientSize.Width, ch = _view.ClientSize.Height;
+                double s0 = old / _previewZoom, s1 = z / _previewZoom;
+                double a0w = _preview.Width * s0, a0h = _preview.Height * s0;
+                double a1w = _preview.Width * s1, a1h = _preview.Height * s1;
+                double p0x = (cw - a0w) / 2 + _panOffset.X;
+                double p0y = (ch - a0h) / 2 + _panOffset.Y;
+                double ux = a0w > 1 ? (m.X - p0x) / a0w : 0.5;   // 鼠标指着页面的哪个位置（0~1）
+                double uy = a0h > 1 ? (m.Y - p0y) / a0h : 0.5;
+                _panOffset = new Point(
+                    (int)Math.Round(m.X - ux * a1w - (cw - a1w) / 2),
+                    (int)Math.Round(m.Y - uy * a1h - (ch - a1h) / 2));
+            }
+            else _panOffset = Point.Empty;
+
+            _zoom = z;
+            ClampPan();
+            UpdateZoomLabel();
+            _view.Invalidate();   // 先用旧位图按新比例垫上（立刻有反馈）
+            Render();             // 后台按新尺寸重渲染（清晰版）
+        }
+
+        // 把平移量夹在"不露出灰底"的范围内；图比预览区小时直接归零（所以缩小时拖不动）
+        private void ClampPan()
+        {
+            if (_preview == null) { _panOffset = Point.Empty; return; }
+            double s = _previewZoom > 0 ? _zoom / _previewZoom : 1.0;
+            double vw = _preview.Width * s, vh = _preview.Height * s;
+            double mx = Math.Max(0, (vw - _view.ClientSize.Width) / 2);
+            double my = Math.Max(0, (vh - _view.ClientSize.Height) / 2);
+            int x = _panOffset.X, y = _panOffset.Y;
+            if (x > mx) x = (int)Math.Round(mx); else if (x < -mx) x = (int)Math.Round(-mx);
+            if (y > my) y = (int)Math.Round(my); else if (y < -my) y = (int)Math.Round(-my);
+            if (x != _panOffset.X || y != _panOffset.Y) _panOffset = new Point(x, y);
+        }
+
+        private bool CanPan()
+        {
+            if (_preview == null) return false;
+            double s = _previewZoom > 0 ? _zoom / _previewZoom : 1.0;
+            return _preview.Width * s > _view.ClientSize.Width || _preview.Height * s > _view.ClientSize.Height;
+        }
+
+        private void OnViewMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            _panMoved = false;
+            if (!CanPan()) return;
+            _panning = true;
+            _panStart = e.Location;
+            _panStartOffset = _panOffset;
+            _view.Cursor = Cursors.SizeAll;
+        }
+
+        private void OnViewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_panning) return;
+            int dx = e.Location.X - _panStart.X, dy = e.Location.Y - _panStart.Y;
+            if (!_panMoved && Math.Abs(dx) + Math.Abs(dy) > 3) _panMoved = true;   // 超过 3px 算拖动
+            _panOffset = new Point(_panStartOffset.X + dx, _panStartOffset.Y + dy);
+            ClampPan();
+            _view.Invalidate();
+        }
+
+        private void OnViewMouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            _panning = false;
+            _view.Cursor = Cursors.Default;
+            if (e.Clicks >= 2 && !_panMoved) ResetZoom();   // 双击（不是拖动）= 回到 100%
+        }
+
+        private void UpdateZoomLabel()
+        {
+            if (_lblZoom == null) return;
+            bool show = Math.Abs(_zoom - 1.0) > 0.0001;
+            if (show) _lblZoom.Text = "缩放 " + (int)Math.Round(_zoom * 100) + "%";
+            if (show != _lblZoom.Visible) _lblZoom.Visible = show;   // 只在变化时动，免得每次重排状态栏
+        }
+
+        // 缩放/平移归零（翻页、打开新文件时用；不主动重渲染，交给调用方统一 Render）
+        private void ResetZoomState()
+        {
+            _zoom = 1.0;
+            _panOffset = Point.Empty;
+            _panning = false;
+            if (_view != null) _view.Cursor = Cursors.Default;
+            UpdateZoomLabel();
+        }
+
+        // 回到 100%（Ctrl+0 或双击预览区）
+        private void ResetZoom()
+        {
+            if (_zoom == 1.0 && _panOffset.X == 0 && _panOffset.Y == 0) return;
+            ResetZoomState();
+            _view.Invalidate();
+            Render();
         }
 
         private sealed class PreviewBox : PictureBox
@@ -433,6 +587,14 @@ namespace PdfTool
                 Control target = Control.FromHandle(m.HWnd);
                 if (target == null || !IsMine(target)) return false;
                 int delta = (short)((long)m.WParam >> 16);
+                if (((long)m.WParam & 0x0008) != 0)   // MK_CONTROL：Ctrl+滚轮 = 缩放（不翻页）
+                {
+                    long lp = m.LParam.ToInt64();
+                    int sx = (short)(lp & 0xFFFF);              // 鼠标屏幕坐标：低位 x、高位 y
+                    int sy = (short)((lp >> 16) & 0xFFFF);
+                    _form.ZoomBy(delta > 0 ? 1 : -1, new Point(sx, sy));
+                    return true;
+                }
                 return _form.WheelNav(delta);
             }
 
@@ -551,6 +713,11 @@ namespace PdfTool
         // 方向键翻页（在页码输入框里时不抢键）
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (keyData == (Keys.Control | Keys.D0) || keyData == (Keys.Control | Keys.NumPad0))
+            {
+                ResetZoom();   // Ctrl+0：缩放回 100%
+                return true;
+            }
             if (_job != null && _job.PageCount > 0 && !_txtPage.Focused)
             {
                 if (keyData == Keys.Left) { StepWheel(-1); return true; }
@@ -646,6 +813,7 @@ namespace PdfTool
             _job = nj;
             _index = 0;
             _dirty = false;
+            ResetZoomState();   // 换文件回到 100%
             _hint.Text = HintOpenDoc;
             int resume = Positions.Resume(path);
             if (resume > _job.PageCount) resume = _job.PageCount;
@@ -668,6 +836,7 @@ namespace PdfTool
             _index = 0;
             _dirty = true;   // 还没有对应文件，视为未保存
             CacheClear();
+            ResetZoomState();   // 新建文档回到 100%
             _hint.Text = HintNewDoc;
             _lblStatus.Text = talk
                 ? "已新建空白 PDF（保存到桌面）——把图片拖进来，再点「保存修改」"
@@ -691,6 +860,11 @@ namespace PdfTool
             if (i > _job.PageCount - 1) i = _job.PageCount - 1;
             if (i == _index) return;
             _index = i;
+            if (_zoom != 1.0 || _panOffset.X != 0 || _panOffset.Y != 0)
+            {
+                ResetZoomState();   // 翻页回到 100%（用户要求）
+                _view.Invalidate();
+            }
             if (_job != null && _job.SourcePath != null)
             {
                 Positions.Remember(_job.SourcePath, _index + 1);
@@ -764,12 +938,24 @@ namespace PdfTool
             int seq = ++_renderSeq;
             int idx = _index;
             bool fast = _fastScroll;
-            int w = _view.ClientSize.Width - 2; // 尽量按显示区 1:1 渲染，避免二次缩放
-            int h = _view.ClientSize.Height - 2;
-            if (w < 60) w = 60;
-            if (h < 60) h = 60;
+            double zoom = _zoom;                 // 本次渲染对应的缩放（渲染期间用户可能又滚了）
+            int bw = _view.ClientSize.Width - 2; // 显示区基准尺寸（1:1 渲染时的尺寸）
+            int bh = _view.ClientSize.Height - 2;
+            if (bw < 60) bw = 60;
+            if (bh < 60) bh = 60;
+            int w = (int)Math.Round(bw * zoom);  // 放大时按更大尺寸渲染（细节来自真像素，不是拉大位图）
+            int h = (int)Math.Round(bh * zoom);
+            long px = (long)w * h;               // 封顶：高倍放大 + 大窗口时位图会到几百 MB
+            if (px > ZoomPixelBudget)
+            {
+                double k = Math.Sqrt((double)ZoomPixelBudget / px);
+                w = Math.Max(60, (int)Math.Round(w * k));
+                h = Math.Max(60, (int)Math.Round(h * k));
+            }
+            double effZoom = (double)w / bw;     // 实际渲染倍率：被预算压缩时小于 zoom（显示仍按 zoom 拉满，只是略糊）
             // 命中缓存（滚回去的页）：直接复制上屏，不走渲染，也就不会闪占位页
-            Bitmap cahHit = fast ? CacheGet(_job.Pages[idx], w, h) : null;   // 补高清时绕过缓存（否则永远补不上）
+            // 缩放状态不走缓存：缓存只存 100% 尺寸的位图，避免大位图把内存撑起来
+            Bitmap cahHit = (fast && zoom == 1.0) ? CacheGet(_job.Pages[idx], w, h) : null;   // 补高清时绕过缓存（否则永远补不上）
             if (cahHit != null)
             {
                 Bitmap cp = null;
@@ -784,6 +970,7 @@ namespace PdfTool
                     _renderSeq++;                  // 让在途渲染作废
                     Bitmap oldh = _preview;
                     _preview = cp;
+                    _previewZoom = 1.0;            // 缓存里只有 100% 尺寸的位图
                     _lastPageSize = cp.Size;
                     _shownPage = idx;
                     _view.Invalidate();
@@ -816,11 +1003,12 @@ namespace PdfTool
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
-                        if (seq != _renderSeq) { CachePut(_job.Pages[idx], bmp, w, h); bmp.Dispose(); return; }   // 过时但已画完：照样存缓存
+                        if (seq != _renderSeq) { if (zoom == 1.0) CachePut(_job.Pages[idx], bmp, w, h); bmp.Dispose(); return; }   // 过时但已画完：照样存缓存（只存 100% 的）
                         _shownSeq = seq;   // 这一版已经上屏，滚轮队列可以走下一步了
                         _lastPageSize = bmp.Size;
+                        _previewZoom = effZoom;
                         _shownPage = idx;
-                        CachePut(_job.Pages[idx], bmp, w, h);
+                        if (zoom == 1.0) CachePut(_job.Pages[idx], bmp, w, h);
                         Bitmap old = _preview;
                         _preview = bmp;
                         _view.Invalidate(); // 交给 OnViewPaint 按 1:1 居中绘制
@@ -957,6 +1145,8 @@ namespace PdfTool
         {
             if (_job == null || _job.PageCount == 0) return;
             Cursor old = Cursor;
+            string path = null;
+            string step = "渲染";
             try
             {
                 Cursor = Cursors.WaitCursor;
@@ -971,12 +1161,23 @@ namespace PdfTool
                     int py = Math.Max(1, (int)Math.Round(h100 / 100.0 * dpi));
                     bmp = _job.RenderPage(_index, px, py, false);
                 }
-                string path;
+                step = "保存";
                 try
                 {
                     path = Util.AutoName(Path.Combine(OutDir(),
                         _job.BaseName + "_第" + (_index + 1) + "页_" + dpi + "dpi.png"));
-                    bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                    // 用 FileStream 落盘再让 GDI+ 往里写：GDI+ 自己开文件在部分目录/路径下会报
+                    // "GDI+ 中发生一般性错误"；换成托管流后，权限类失败会变成明确的"访问被拒绝"。
+                    try
+                    {
+                        using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+                            bmp.Save(fs, System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    catch
+                    {
+                        try { if (File.Exists(path)) File.Delete(path); } catch { }   // 不留半截文件
+                        throw;
+                    }
                 }
                 finally { bmp.Dispose(); }
                 _lblStatus.Text = "已导出 " + Path.GetFileName(path) + " 到" + DestName() + "。";
@@ -986,7 +1187,13 @@ namespace PdfTool
             catch (Exception ex)
             {
                 _lblStatus.Text = "导出失败。";
-                MessageBox.Show(this, "导出失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                // 诊断信息：失败步骤 + 异常类型 + 目标路径（此前只报一句"GDI+ 一般性错误"，无从定位）
+                string detail = "失败步骤：" + step;
+                if (path != null) detail += "\n目标文件：" + path;
+                else detail += "\n目标目录：" + (OutDir() ?? "(空)");
+                detail += "\n异常类型：" + ex.GetType().Name;
+                MessageBox.Show(this, "导出失败：" + ex.Message + "\n\n" + detail,
+                    "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally { Cursor = old; }
         }
