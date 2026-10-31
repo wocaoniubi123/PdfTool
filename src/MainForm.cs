@@ -53,6 +53,9 @@ namespace PdfTool
         private CheckBox _chkDesktop;   // 输出位置：桌面
         private CheckBox _chkLocal;     // 输出位置：源文件目录
         private bool _syncingMode;
+        private string _savePath;       // 「保存」的落点（上次保存/另存为过的文件；null = 还没定，先走另存为）
+        private bool _dragging;         // 正在往窗口里拖文件（用于画"插到前/后"的位置提示）
+        private bool _dragAbove = true; // 松手插到当前页**之前**（拖在左半边）还是之后（右半边）
 
         // 缩放：Ctrl+滚轮每格 ×1.25，范围 25%~1000%（放大走"重新渲染"，不是把位图拉大）
         private const double ZoomMin = 0.25;
@@ -104,9 +107,12 @@ namespace PdfTool
             Button btnNew = MakeButton("新建 PDF");
             btnNew.Click += delegate { NewPdf(true); };
             fileGroup.Controls.Add(btnNew);
-            Button btnSave = MakeButton("保存修改");
-            btnSave.Click += delegate { SaveEdited(); };
+            Button btnSave = MakeButton("保存");
+            btnSave.Click += delegate { QuickSave(); };
             fileGroup.Controls.Add(btnSave);
+            Button btnSaveAs = MakeButton("另存为");
+            btnSaveAs.Click += delegate { SaveEdited(); };
+            fileGroup.Controls.Add(btnSaveAs);
 
             _chkDesktop = MakeModeBox("存到桌面");
             _chkDesktop.Margin = new Padding(4, 0, 0, 0);   // 两个勾选框凑成一组，右边距交给下面那个
@@ -226,6 +232,8 @@ namespace PdfTool
             _view.SizeMode = PictureBoxSizeMode.Normal; // 用 OnViewPaint 按 1:1 画，不做二次缩放
             _view.AllowDrop = true;
             _view.DragEnter += OnDragEnter;
+            _view.DragOver += OnDragOver;
+            _view.DragLeave += OnDragLeave;
             _view.DragDrop += OnDragDrop;
 
             _hint = new Label();
@@ -237,6 +245,8 @@ namespace PdfTool
             _hint.Text = HintOpenDoc;
             _hint.AllowDrop = true;
             _hint.DragEnter += OnDragEnter;
+            _hint.DragOver += OnDragOver;
+            _hint.DragLeave += OnDragLeave;
             _hint.DragDrop += OnDragDrop;
             _view.Paint += OnViewPaint;
             _view.MouseDown += OnViewMouseDown;
@@ -287,6 +297,8 @@ namespace PdfTool
             };
 
             DragEnter += OnDragEnter;
+            DragOver += OnDragOver;
+            DragLeave += OnDragLeave;
             DragDrop += OnDragDrop;
             Settings.Load();
             SetSaveMode(Settings.SaveToDesktop);
@@ -427,7 +439,12 @@ namespace PdfTool
 
         private void OnViewPaint(object sender, PaintEventArgs e)
         {
-            if (_preview == null) { DrawPlaceholder(e.Graphics); return; }   // 还没画好 → 占位页
+            if (_preview == null)   // 还没画好 → 占位页（拖放提示照样要画）
+            {
+                DrawPlaceholder(e.Graphics);
+                if (_dragging) DrawDropHint(e.Graphics);
+                return;
+            }
             // 位图是按 _previewZoom 渲染的、屏幕上要按 _zoom 显示：两者不等时先垫着旧图（渲染好了会被替换）
             double s = _previewZoom > 0 ? _zoom / _previewZoom : 1.0;
             int dw = (int)Math.Round(_preview.Width * s);
@@ -440,6 +457,32 @@ namespace PdfTool
             e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
             if (dw == _preview.Width && dh == _preview.Height) e.Graphics.DrawImageUnscaled(_preview, x, y);   // 1:1 走原路径
             else e.Graphics.DrawImage(_preview, new Rectangle(x, y, dw, dh));
+            if (_dragging) DrawDropHint(e.Graphics);
+        }
+
+        // 拖动文件进来时，在预览区左/右半边画一条高亮 + 文字：告诉你松手会插到前还是后
+        private void DrawDropHint(Graphics g)
+        {
+            int cw = _view.ClientSize.Width, ch = _view.ClientSize.Height;
+            if (cw <= 0 || ch <= 0) return;
+            int half = cw / 2;
+            bool above = _dragAbove;
+            Rectangle zone = above ? new Rectangle(0, 0, half, ch) : new Rectangle(half, 0, cw - half, ch);
+            Color tint = Color.FromArgb(48, 60, 140, 220);
+            using (SolidBrush b = new SolidBrush(tint)) g.FillRectangle(b, zone);
+            using (Pen p = new Pen(Color.FromArgb(200, 60, 140, 220), 3))
+                g.DrawLine(p, above ? half - 1 : half, 0, above ? half - 1 : half, ch);   // 中线标出来
+            string txt = above ? "松手：插入到本页之前" : "松手：插入到本页之后";
+            using (Font f = new Font("Microsoft YaHei UI", 12f, FontStyle.Bold))
+            using (SolidBrush fb = new SolidBrush(Color.White))
+            using (SolidBrush bb = new SolidBrush(Color.FromArgb(190, 40, 90, 170)))
+            {
+                SizeF sz = g.MeasureString(txt, f);
+                float tx = above ? 24 : cw - sz.Width - 24;
+                float ty = ch / 2f - sz.Height / 2;
+                g.FillRectangle(bb, tx - 10, ty - 6, sz.Width + 20, sz.Height + 12);
+                g.DrawString(txt, f, fb, tx, ty);
+            }
         }
 
         // ---------------- 缩放 / 拖动 ----------------
@@ -685,15 +728,53 @@ namespace PdfTool
                     (files[0].ToLowerInvariant().EndsWith(".pdf") || IsImageFile(files[0])))
                 {
                     e.Effect = DragDropEffects.Copy;
+                    _dragging = true;
+                    UpdateDragSide(e);
+                    _view.Invalidate();          // 立刻画出"插到前 / 插到后"的提示
                     return;
                 }
             }
             e.Effect = DragDropEffects.None;
         }
 
+        // 拖动过程中实时判断：鼠标在预览区**左半边** = 插到当前页前面，右半边 = 插到后面
+        private void OnDragOver(object sender, DragEventArgs e)
+        {
+            if (e.Effect == DragDropEffects.None && !e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                e.Effect = DragDropEffects.None;
+                return;
+            }
+            if (!_dragging) _dragging = true;
+            bool old = _dragAbove;
+            UpdateDragSide(e);
+            if (old != _dragAbove) _view.Invalidate();   // 跨过中线才重绘
+            e.Effect = DragDropEffects.Copy;
+        }
+
+        private void OnDragLeave(object sender, EventArgs e)
+        {
+            if (!_dragging) return;
+            _dragging = false;
+            _view.Invalidate();
+        }
+
+        // 按鼠标位置决定插入方向：左半边 → 前面，右半边 → 后面
+        private void UpdateDragSide(DragEventArgs e)
+        {
+            // 以**预览区**的中心为准（不是整窗中心），这样左右判断和看到的页面位置一致
+            int cx;
+            try { cx = _view.PointToClient(new Point(e.X, e.Y)).X; }
+            catch { cx = _view.ClientSize.Width / 2; }
+            int mid = _view.ClientSize.Width / 2;
+            _dragAbove = _job == null || _job.PageCount == 0 || cx < mid;
+        }
+
         private void OnDragDrop(object sender, DragEventArgs e)
         {
             string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            _dragging = false;
+            _view.Invalidate();
             if (files == null || files.Length == 0) return;
             List<string> images = new List<string>();
             string pdf = null;
@@ -702,7 +783,7 @@ namespace PdfTool
                 if (f.ToLowerInvariant().EndsWith(".pdf")) { if (pdf == null) pdf = f; }
                 else if (IsImageFile(f)) images.Add(f);
             }
-            if (images.Count > 0) InsertImageFiles(images, true); // 拖进来的图插在当前页之前
+            if (images.Count > 0) InsertImageFiles(images, _dragAbove);   // 左半边插前、右半边插后
             else if (pdf != null) OpenFile(pdf);
             Activate();  // 拖完把焦点收回程序，接着就能用方向键/滚轮
             Focus();
@@ -813,6 +894,7 @@ namespace PdfTool
             _job = nj;
             _index = 0;
             _dirty = false;
+            _savePath = null;   // 换文件：保存落点清空（点「保存」会先走另存为）
             ResetZoomState();   // 换文件回到 100%
             _hint.Text = HintOpenDoc;
             int resume = Positions.Resume(path);
@@ -835,12 +917,13 @@ namespace PdfTool
             _job = PdfJob.CreateNew(desktop, "新PDF");
             _index = 0;
             _dirty = true;   // 还没有对应文件，视为未保存
+            _savePath = null;   // 新建：还没有落点，「保存」会先走另存为
             CacheClear();
             ResetZoomState();   // 新建文档回到 100%
             _hint.Text = HintNewDoc;
             _lblStatus.Text = talk
-                ? "已新建空白 PDF（保存到桌面）——把图片拖进来，再点「保存修改」"
-                : "已新建空白 PDF：把图片拖进来，再点「保存修改」";
+                ? "已新建空白 PDF（保存到桌面）——把图片拖进来，再点「另存为」"
+                : "已新建空白 PDF：把图片拖进来，再点「另存为」";
             UpdateUi();
             Render();
         }
@@ -1036,7 +1119,7 @@ namespace PdfTool
             _job.Pages.RemoveAt(_index);
             if (_index > _job.PageCount - 1) _index = _job.PageCount - 1;
             _dirty = true;
-            _lblStatus.Text = "已删除一页（改动在内存里，点「保存修改」才写盘）";
+            _lblStatus.Text = "已删除一页（改动在内存里，点「保存」才写盘）";
             UpdateUi();
             Render();
         }
@@ -1107,7 +1190,7 @@ namespace PdfTool
             if (ok > 0)
             {
                 _lblStatus.Text = "已插入 " + ok + " 张图片（" + (above ? "在当前页前面" : "在当前页后面")
-                    + "，点「保存修改」写盘）";
+                    + "，点「保存」写盘）";
                 UpdateUi();
                 Render();
             }
@@ -1287,6 +1370,24 @@ namespace PdfTool
             }
         }
 
+        // 「保存」：直接覆盖**原 PDF 文件**（打开的文档）——不弹框、不生成 _已修改；
+        // 只有"另存为"过之后才改成覆盖那个新落点；新建的空白 PDF 没有源文件，转成另存为。
+        private void QuickSave()
+        {
+            if (_job == null) return;
+            if (_job.PageCount == 0)
+            {
+                _lblStatus.Text = "还没有内容可保存：先把图片拖进来。";
+                return;
+            }
+            string target = !string.IsNullOrEmpty(_savePath)
+                ? _savePath
+                : (_job.SourcePath == null ? null : _job.SourcePath);
+            if (target == null) { SaveEdited(); return; }   // 新建的空白 PDF：没有原文件可覆盖
+            WritePdf(target);
+        }
+
+        // 「另存为」：默认填上次的文件（没有就按输出位置推一个），撞名弹「覆盖 / +1」，选完写盘
         private void SaveEdited()
         {
             if (_job == null) return;
@@ -1299,21 +1400,40 @@ namespace PdfTool
             {
                 // 新建的空白 PDF：直接存 <名字>.pdf（不带 _已修改）；打开的 PDF：<名字>_已修改.pdf
                 // 两者撞名都弹"覆盖 / +1"对话框
-                string p = ResolvePath(OutPath(_job.SourcePath == null ? ".pdf" : "_已修改.pdf"));
+                string def = string.IsNullOrEmpty(_savePath)
+                    ? OutPath(_job.SourcePath == null ? ".pdf" : "_已修改.pdf")
+                    : _savePath;
+                string p = ResolvePath(def);
                 if (p == null)   // 用户点了 X / Esc：不保存，直接返回
                 {
                     _lblStatus.Text = "已取消保存（没有写任何文件）。";
                     return;
                 }
-                lock (_renderLock) { _job.SavePages(p, _job.Pages); }
-                _dirty = false;
-                UpdateUi();
-                _lblStatus.Text = "已保存：" + p;
-                MessageBox.Show(this, "已保存：\n" + p, "保存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                WritePdf(p);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, "保存失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // 真正写盘（保存 / 另存为共用）：成功返回 true，并把落点记成 p
+        private bool WritePdf(string p)
+        {
+            try
+            {
+                lock (_renderLock) { _job.SavePages(p, _job.Pages); }
+                _savePath = p;          // 下次点「保存」直接覆盖这里
+                _dirty = false;
+                UpdateUi();
+                _lblStatus.Text = "已保存：" + p;
+                MessageBox.Show(this, "已保存：\n" + p, "保存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "保存失败：" + ex.Message, "出错", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
         }
 

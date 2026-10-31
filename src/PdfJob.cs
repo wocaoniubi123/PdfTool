@@ -973,8 +973,7 @@ namespace PdfTool
                 if (src != IntPtr.Zero) Pdfium.FPDF_CloseDocument(src);
                 Pdfium.FPDF_CloseDocument(work);
             }
-            if (File.Exists(outPath)) File.Delete(outPath);
-            File.Move(tmp, outPath);
+            ReplaceFile(tmp, outPath);
         }
 
         // 从零构建（新建的空白 PDF 用）：先写 .tmp 再替换，避免写坏已有文件
@@ -996,8 +995,30 @@ namespace PdfTool
             {
                 Pdfium.FPDF_CloseDocument(dest);
             }
-            if (File.Exists(outPath)) File.Delete(outPath);
-            File.Move(tmp, outPath);
+            ReplaceFile(tmp, outPath);
+        }
+
+        // 用 tmp 原子替换目标文件：不"先删后移"（那样一旦移动失败，原文件就没了——「保存」现在直接覆盖原 PDF，这步必须安全）
+        // File.Replace(tmp, 目标, null)：第三个参数传 null = 不产生任何备份文件，本身就是原子的
+        // （要么完整成功，要么原文件一个字节都没动）
+        // 失败时不会走到"删原文件"的动作：只删掉 tmp，原文件保持原样，然后把原因抛给用户。
+        private static void ReplaceFile(string tmp, string outPath)
+        {
+            if (!File.Exists(outPath))
+            {
+                File.Move(tmp, outPath);
+                return;
+            }
+            try
+            {
+                File.Replace(tmp, outPath, null);
+            }
+            catch (Exception ex)
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                throw new IOException("写不进「" + Path.GetFileName(outPath) + "」：文件可能正被其他程序打开" +
+                    "（比如 PDF 阅读器），关掉它再保存，原文件没有被改动。\n原始错误：" + ex.Message, ex);
+            }
         }
 
         // 打印用：把当前页面列表构建成内存里的 PDF（不落盘），用于"图片页 → 真 PDF 页"的转换
